@@ -76,6 +76,40 @@ func ListCurrentTripsByVehicle(ctx context.Context, tx *sql.Tx, vehicleID string
 	return scanTripRows(rows)
 }
 
+// ListCurrentTripsAfter is ListCurrentTripsByVehicle with cursor pagination:
+// it returns at most limit trips strictly after (afterStartMs, afterTripID)
+// in (start_ms, trip_id) order.
+func ListCurrentTripsAfter(ctx context.Context, tx *sql.Tx, vehicleID string, includeMerged bool, statusFilter string, afterStartMs *int64, afterTripID string, limit int) ([]TripRow, error) {
+	query := `
+		SELECT trip_id, vehicle_id, start_ms, end_ms, fix_count, min_latitude, max_latitude,
+		       min_longitude, max_longitude, status, close_reason, superseded_by_trip_id,
+		       created_revision, updated_revision, closed_at_ms, forced_close, missing_fix_count_at_close
+		FROM trips WHERE vehicle_id = ?`
+	args := []any{vehicleID}
+	if !includeMerged {
+		query += " AND close_reason <> 'MERGED'"
+	}
+	if statusFilter != "" {
+		query += " AND status = ?"
+		args = append(args, statusFilter)
+	}
+	if afterStartMs != nil {
+		query += " AND (start_ms > ? OR (start_ms = ? AND trip_id > ?))"
+		args = append(args, *afterStartMs, *afterStartMs, afterTripID)
+	}
+	query += " ORDER BY start_ms ASC, trip_id ASC"
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list current trips after: %w", err)
+	}
+	defer rows.Close()
+	return scanTripRows(rows)
+}
+
 func scanTripRows(rows *sql.Rows) ([]TripRow, error) {
 	var out []TripRow
 	for rows.Next() {

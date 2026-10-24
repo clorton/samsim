@@ -8,9 +8,9 @@ import (
 
 	"gpsdemo/internal/clock"
 	"gpsdemo/internal/events"
-	"gpsdemo/internal/httpapi"
 	"gpsdemo/internal/idgen"
 	"gpsdemo/internal/storage"
+	"gpsdemo/internal/wire"
 
 	telemetryv1 "gpsdemo/gen/telemetry/v1"
 )
@@ -65,10 +65,10 @@ func buildPacket(simulatorID, vehicleID, packetID string, baseMs int64, specs ..
 
 func mustIngest(t *testing.T, svc *Service, pkt *telemetryv1.TelemetryPacket) *IngestResult {
 	t.Helper()
-	if err := httpapi.ValidatePacketSemantics(pkt, svc.MaxFixesPerPacket); err != nil {
+	if err := wire.ValidatePacketSemantics(pkt, svc.MaxFixesPerPacket); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
-	np, err := httpapi.NormalizePacket(pkt)
+	np, err := wire.NormalizePacket(pkt)
 	if err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
@@ -81,15 +81,30 @@ func mustIngest(t *testing.T, svc *Service, pkt *telemetryv1.TelemetryPacket) *I
 
 func ingestExpectingErr(t *testing.T, svc *Service, pkt *telemetryv1.TelemetryPacket) error {
 	t.Helper()
-	if err := httpapi.ValidatePacketSemantics(pkt, svc.MaxFixesPerPacket); err != nil {
+	if err := wire.ValidatePacketSemantics(pkt, svc.MaxFixesPerPacket); err != nil {
 		return err
 	}
-	np, err := httpapi.NormalizePacket(pkt)
+	np, err := wire.NormalizePacket(pkt)
 	if err != nil {
 		return err
 	}
 	_, err = svc.Ingest(context.Background(), np)
 	return err
+}
+
+// ingestNoFatal runs the full ingest pipeline and returns (result, error)
+// without calling any *testing.T failure method, so it is safe to call
+// concurrently from multiple goroutines whose results are asserted on by
+// the calling goroutine afterward.
+func ingestNoFatal(svc *Service, pkt *telemetryv1.TelemetryPacket) (*IngestResult, error) {
+	if err := wire.ValidatePacketSemantics(pkt, svc.MaxFixesPerPacket); err != nil {
+		return nil, err
+	}
+	np, err := wire.NormalizePacket(pkt)
+	if err != nil {
+		return nil, err
+	}
+	return svc.Ingest(context.Background(), np)
 }
 
 const baseMs = int64(1792845600000) // positive base timestamp, per AG-10 guidance

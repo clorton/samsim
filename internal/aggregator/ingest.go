@@ -9,8 +9,8 @@ import (
 
 	"gpsdemo/internal/apierr"
 	"gpsdemo/internal/events"
-	"gpsdemo/internal/httpapi"
 	"gpsdemo/internal/storage"
+	"gpsdemo/internal/wire"
 )
 
 // ingestTxResult is the value threaded from the ingestion transaction
@@ -25,7 +25,7 @@ type ingestTxResult struct {
 // semantically validated packet: fingerprinting, idempotency checks,
 // per-vehicle+writer-coordinator locking, fix storage, AG-05 trip
 // reconstruction, revision bump, and post-commit event publication.
-func (s *Service) Ingest(ctx context.Context, np *httpapi.NormalizedPacket) (*IngestResult, error) {
+func (s *Service) Ingest(ctx context.Context, np *wire.NormalizedPacket) (*IngestResult, error) {
 	fp, err := np.Fingerprint()
 	if err != nil {
 		return nil, fmt.Errorf("aggregator: fingerprint packet: %w", err)
@@ -48,7 +48,7 @@ func (s *Service) Ingest(ctx context.Context, np *httpapi.NormalizedPacket) (*In
 	return result.response, nil
 }
 
-func (s *Service) ingestTx(ctx context.Context, tx *sql.Tx, np *httpapi.NormalizedPacket, fpHex string) (*ingestTxResult, error) {
+func (s *Service) ingestTx(ctx context.Context, tx *sql.Tx, np *wire.NormalizedPacket, fpHex string) (*ingestTxResult, error) {
 	nowMs := s.Clock.NowMs()
 
 	// Step 3: global packet-key idempotency lookup.
@@ -84,7 +84,7 @@ func (s *Service) ingestTx(ctx context.Context, tx *sql.Tx, np *httpapi.Normaliz
 		return nil, err
 	}
 
-	var newFixes []httpapi.NormalizedFix
+	var newFixes []wire.NormalizedFix
 	duplicateFixes := np.InPacketDuplicateFixes
 	for _, f := range np.Fixes {
 		if ex, ok := storedExisting[f.TimestampMs]; ok {
@@ -105,7 +105,7 @@ func (s *Service) ingestTx(ctx context.Context, tx *sql.Tx, np *httpapi.Normaliz
 	}
 
 	quarantinedCount := 0
-	var eligibleNewFixes []httpapi.NormalizedFix
+	var eligibleNewFixes []wire.NormalizedFix
 	for _, f := range newFixes {
 		reason := assignmentReasonFor(f.TimestampMs, barriers)
 		if err := storage.InsertFix(ctx, tx, storage.FixRow{
@@ -207,7 +207,7 @@ func (s *Service) ingestTx(ctx context.Context, tx *sql.Tx, np *httpapi.Normaliz
 	return &ingestTxResult{response: resp, event: env}, nil
 }
 
-func fixEqualsStored(f httpapi.NormalizedFix, ex storage.FixRow) bool {
+func fixEqualsStored(f wire.NormalizedFix, ex storage.FixRow) bool {
 	return f.Latitude == ex.Latitude &&
 		f.Longitude == ex.Longitude &&
 		float64(f.SpeedMps) == ex.SpeedMps &&

@@ -1,4 +1,9 @@
-package httpapi
+// Package wire implements AG-02's telemetry wire contract: strict JSON and
+// binary Protobuf decoding, semantic validation, and canonical
+// normalization/fingerprinting (AG-04 step 1-2). It has no dependency on
+// storage or the aggregator domain service so it can be shared by both the
+// aggregator's HTTP ingestion handler and (later) the simulator.
+package wire
 
 import (
 	"bytes"

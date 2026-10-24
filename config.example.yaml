@@ -1,0 +1,25 @@
+# Example aggregator configuration (AG-01). All fields are optional; any
+# field omitted here falls back to the built-in default shown in comments.
+# Run with: go run ./cmd/aggregator -config config.example.yaml
+
+listen: 127.0.0.1:8080          # default: 127.0.0.1:8080 (loopback only; no auth)
+database_path: ./data/gps.sqlite # default: ./data/gps.sqlite
+
+# Frozen into the database on first run. Changing either value against an
+# existing database is rejected at startup (AG-01).
+trip_gap_seconds: 600            # default: 600 (10 minutes)
+expected_fix_interval_ms: 1000   # default: 1000
+
+max_body_bytes: 1048576          # default: 1048576 (1 MiB)
+max_fixes_per_packet: 10000      # default: 10000
+sqlite_busy_timeout_ms: 5000     # default: 5000
+websocket_queue_capacity: 256    # default: 256
+
+# Static, trusted simulator control-plane registry (AG-09). Empty by
+# default; the /api/v1/simulators* endpoints are only registered when this
+# is nonempty.
+simulators: []
+# simulators:
+#   - simulator_id: sim-001
+#     control_url: http://127.0.0.1:9090
+#     vehicle_id: vehicle-001

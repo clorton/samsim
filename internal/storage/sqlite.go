@@ -43,6 +43,10 @@ type Store struct {
 
 	writerMu sync.Mutex
 
+	// precommitFailureHook is a test-only injection point; see
+	// SetPrecommitFailureHook.
+	precommitFailureHook func() error
+
 	DatabaseID            string
 	TripGapSeconds        int64
 	ExpectedFixIntervalMs int64
@@ -315,11 +319,72 @@ func WithWriteTx[T any](ctx context.Context, s *Store, fn func(ctx context.Conte
 		tx.Rollback()
 		return zero, err
 	}
+
+	// Test-only precommit failure injection (AG-10/T14): if set, this runs
+	// after fn has staged all writes in tx but before the commit actually
+	// happens, letting tests verify that a failure here leaves no partial
+	// packet/fix/trip/revision/event trace. Never set outside tests.
+	if s.precommitFailureHook != nil {
+		if hookErr := s.precommitFailureHook(); hookErr != nil {
+			tx.Rollback()
+			return zero, hookErr
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return zero, fmt.Errorf("storage: commit write tx: %w", err)
 	}
 	if publish != nil {
 		publish(result)
+	}
+	return result, nil
+}
+
+// SetPrecommitFailureHook installs or clears (pass nil) a test-only hook
+// invoked inside every WithWriteTx call after the transaction function
+// succeeds but before commit. Used by AG-10/T14 crash-injection tests to
+// simulate a failure between "all writes staged" and "durably committed"
+// without needing real process-crash infrastructure. Not safe to call
+// concurrently with in-flight WithWriteTx calls; set it before the
+// triggering operation and clear it immediately after.
+func (s *Store) SetPrecommitFailureHook(hook func() error) {
+	s.writerMu.Lock()
+	defer s.writerMu.Unlock()
+	s.precommitFailureHook = hook
+}
+
+// WithWriterLock runs fn while holding the process-wide writer coordinator
+// lock, without starting a transaction. This lets callers that need to
+// observe current state and register for future commits atomically (e.g.
+// AG-08's subscribe-then-ready handshake) do so without racing a concurrent
+// commit: no WithWriteTx call can interleave while fn runs.
+func (s *Store) WithWriterLock(fn func() error) error {
+	s.writerMu.Lock()
+	defer s.writerMu.Unlock()
+	return fn()
+}
+
+// ReadUnderWriterLock runs fn in a short read-only transaction on the write
+// connection while the writer coordinator lock is held (see
+// WithWriterLock). Using the write connection (not the read pool)
+// guarantees fn observes every previously committed write with no
+// replication lag, which matters because the caller is about to register
+// for future commits and must not miss or double-count the one that just
+// landed.
+func ReadUnderWriterLock[T any](ctx context.Context, s *Store, fn func(ctx context.Context, tx *sql.Tx) (T, error)) (T, error) {
+	var zero T
+	tx, err := s.writeDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return zero, fmt.Errorf("storage: begin read-under-writer-lock tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	result, err := fn(ctx, tx)
+	if err != nil {
+		return zero, err
+	}
+	if err := tx.Commit(); err != nil {
+		return zero, fmt.Errorf("storage: commit read-under-writer-lock tx: %w", err)
 	}
 	return result, nil
 }

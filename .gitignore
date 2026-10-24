@@ -1,0 +1,6 @@
+/data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+/dashboard/node_modules/
+/dashboard/dist/

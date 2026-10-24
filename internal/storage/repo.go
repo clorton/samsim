@@ -112,6 +112,28 @@ func ListVehicles(ctx context.Context, tx *sql.Tx) ([]VehicleRow, error) {
 	return out, rows.Err()
 }
 
+// ListVehiclesAfter returns up to limit vehicles with vehicle_id > afterID
+// (empty string means from the start), ordered ascending by vehicle_id, for
+// cursor pagination of the global vehicle list.
+func ListVehiclesAfter(ctx context.Context, tx *sql.Tx, afterID string, limit int) ([]VehicleRow, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT vehicle_id, latest_fix_timestamp_ms, active_trip_id, revision, updated_at_ms
+		FROM vehicles WHERE vehicle_id > ? ORDER BY vehicle_id ASC LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list vehicles after: %w", err)
+	}
+	defer rows.Close()
+	var out []VehicleRow
+	for rows.Next() {
+		var v VehicleRow
+		if err := rows.Scan(&v.VehicleID, &v.LatestFixTimestampMs, &v.ActiveTripID, &v.Revision, &v.UpdatedAtMs); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // GetFix looks up one raw fix by vehicle/timestamp.
 func GetFix(ctx context.Context, tx *sql.Tx, vehicleID string, timestampMs int64) (*FixRow, error) {
 	row := tx.QueryRowContext(ctx, `
@@ -263,4 +285,67 @@ func GetCurrentTripIDForFix(ctx context.Context, tx *sql.Tx, vehicleID string, t
 		return "", fmt.Errorf("storage: get current trip for fix: %w", err)
 	}
 	return tripID, nil
+}
+
+// FixWithCurrentTrip pairs a raw fix with its current (non-MERGED) trip
+// assignment, if any.
+type FixWithCurrentTrip struct {
+	Fix           FixRow
+	CurrentTripID *string
+}
+
+// ListFixesWithCurrentTripByVehicle returns raw fixes for a vehicle,
+// chronological, each annotated with its current trip assignment (nil if
+// unassigned/quarantined), optionally filtered by inclusive [fromMs,toMs]
+// and a minimum exclusive timestamp (afterMs, for cursor pagination; nil
+// means from the start). Results are limited to at most limit rows.
+func ListFixesWithCurrentTripByVehicle(ctx context.Context, tx *sql.Tx, vehicleID string, fromMs, toMs, afterMs *int64, limit int) ([]FixWithCurrentTrip, error) {
+	query := `
+		SELECT f.vehicle_id, f.timestamp_ms, f.latitude, f.longitude, f.speed_mps, f.heading_degrees,
+		       f.first_simulator_id, f.first_packet_id, f.received_at_ms, f.assignment_reason,
+		       (SELECT tf.trip_id FROM trip_fixes tf
+		        JOIN trips t ON t.trip_id = tf.trip_id
+		        WHERE tf.vehicle_id = f.vehicle_id AND tf.timestamp_ms = f.timestamp_ms AND t.close_reason <> 'MERGED'
+		        LIMIT 1) AS current_trip_id
+		FROM gps_fixes f
+		WHERE f.vehicle_id = ?`
+	args := []any{vehicleID}
+	if fromMs != nil {
+		query += " AND f.timestamp_ms >= ?"
+		args = append(args, *fromMs)
+	}
+	if toMs != nil {
+		query += " AND f.timestamp_ms <= ?"
+		args = append(args, *toMs)
+	}
+	if afterMs != nil {
+		query += " AND f.timestamp_ms > ?"
+		args = append(args, *afterMs)
+	}
+	query += " ORDER BY f.timestamp_ms ASC"
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("storage: list fixes with current trip: %w", err)
+	}
+	defer rows.Close()
+	var out []FixWithCurrentTrip
+	for rows.Next() {
+		var f FixRow
+		var currentTripID sql.NullString
+		if err := rows.Scan(&f.VehicleID, &f.TimestampMs, &f.Latitude, &f.Longitude, &f.SpeedMps, &f.HeadingDegrees,
+			&f.FirstSimulatorID, &f.FirstPacketID, &f.ReceivedAtMs, &f.AssignmentReason, &currentTripID); err != nil {
+			return nil, err
+		}
+		item := FixWithCurrentTrip{Fix: f}
+		if currentTripID.Valid {
+			id := currentTripID.String
+			item.CurrentTripID = &id
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }

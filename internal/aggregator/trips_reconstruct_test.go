@@ -41,6 +41,17 @@ func listMutableTrips(t *testing.T, store *storage.Store, vehicleID string) []st
 	return trips
 }
 
+func listManualBarriers(t *testing.T, store *storage.Store, vehicleID string) []storage.ManualBarrierRow {
+	t.Helper()
+	barriers, err := storage.ReadTx(context.Background(), store, func(ctx context.Context, tx *sql.Tx) ([]storage.ManualBarrierRow, error) {
+		return storage.ListManualBarriersByVehicle(ctx, tx, vehicleID)
+	})
+	if err != nil {
+		t.Fatalf("list manual barriers: %v", err)
+	}
+	return barriers
+}
+
 func tripFixTimestamps(t *testing.T, store *storage.Store, tripID string) []int64 {
 	t.Helper()
 	ts, err := storage.ReadTx(context.Background(), store, func(ctx context.Context, tx *sql.Tx) ([]int64, error) {

@@ -6,14 +6,14 @@ The backend uses Go and SQLite. The planned dashboard uses React, TypeScript, Vi
 
 ## Project status
 
-This README describes the agreed design and intended repository layout. Application commands, flags, configuration loading, and scripts still need to be implemented. The Protobuf setup/generation commands below can be used once the schema and Go module exist.
+**The aggregator (AG-01 through AG-09) is implemented and runnable.** AG-10 (verification/operations) is substantially covered by the test suite below; see "Development and validation" for what remains. The GPS simulator, inspector CLI, and dashboard are not yet implemented.
 
 Implementation order:
 
-1. Aggregator
-2. GPS simulator
-3. Inspector CLI
-4. Minimal dashboard
+1. **Aggregator — done** (this README's "Running the aggregator" section below is accurate and tested)
+2. GPS simulator — not started
+3. Inspector CLI — not started
+4. Minimal dashboard — not started
 
 Track work in [TODO.md](TODO.md). The normative aggregator contract is [AGGREGATOR_SPEC.md](AGGREGATOR_SPEC.md); its `AG-01` through `AG-10` IDs match the checklist. If this README and the detailed spec differ, follow the spec and update this README.
 
@@ -65,20 +65,15 @@ Trips represent telemetry continuity, not verified vehicle movement.
 
 ## Local prerequisites
 
-Already required: the Go toolchain and Git. Install the Protobuf compiler and Go generation plugin on macOS:
+Required: the Go toolchain (1.23+; developed and tested on 1.26). `protoc` and `protoc-gen-go` are only needed if you change `proto/telemetry/v1/telemetry.proto` and must regenerate `gen/telemetry/v1/telemetry.pb.go`; the generated file is already checked in, so a normal build/test/run does not need them.
+
+To regenerate after editing the `.proto` file:
 
 ```bash
 brew install protobuf
 go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-```
-
-Ensure the plugin installation directory is on your PATH. With the default Go installation location:
-
-```bash
 export PATH="$PATH:$(go env GOPATH)/bin"
 ```
-
-If `GOBIN` is configured, add that directory instead. Persist the appropriate PATH setting in your shell configuration.
 
 Verify installation:
 
@@ -88,8 +83,6 @@ protoc --version
 protoc-gen-go --version
 ```
 
-The `@latest` command is for initial setup. Once selected, record and pin generator/runtime versions and record the compiler version so generation is reproducible.
-
 Useful additional tools:
 
 | Tool | Purpose |
@@ -97,65 +90,57 @@ Useful additional tools:
 | `curl` | Submit telemetry and inspect REST APIs |
 | `sqlite3` | Inspect database contents during development |
 | `jq` | Optional JSON formatting/filtering |
-| Node.js LTS and npm | Build the dashboard; choose a version supported by the selected Vite release |
-| Apple Command Line Tools | C compiler support if using a cgo-based SQLite driver; also needed for applicable Go race-test builds |
-
-For optional database/JSON command-line tools:
+| Node.js LTS and npm | Build the dashboard (not yet implemented) |
 
 ```bash
 brew install sqlite jq
 ```
 
-If compiler tools are missing on macOS:
+**Dependency choices actually used** (see `go.mod`): `modernc.org/sqlite` (pure Go, no cgo/C compiler required), `github.com/coder/websocket` (WebSocket server/client), `gopkg.in/yaml.v3` (config file parsing), `google.golang.org/protobuf` (generated code runtime + protojson).
 
-```bash
-xcode-select --install
-```
-
-Choose and pin a SQLite driver during implementation. A cgo-based driver such as `mattn/go-sqlite3` requires a C compiler; a cgo-free driver has different build requirements. React, Vite, TypeScript, MapLibre, Cobra, the Protobuf runtime, and the database driver belong in project dependency manifests. No separate gRPC toolchain is needed for this design.
-
-Tool documentation: [Go Protobuf](https://protobuf.dev/getting-started/gotutorial/), [Protobuf compiler package](https://formulae.brew.sh/formula/protobuf), [SQLite CLI](https://www.sqlite.org/cli.html), [Vite setup](https://vite.dev/guide/).
-
-## Intended repository layout
+## Repository layout
 
 ```text
-gps-telemetry-demo/
+samsim/
 ├── README.md
 ├── TODO.md
 ├── AGGREGATOR_SPEC.md
+├── aggregator.md         # curl/wget/browser endpoint reference
 ├── go.mod
 ├── go.sum
+├── config.example.yaml
 ├── cmd/
-│   ├── aggregator/
-│   ├── simulator/
-│   └── gpsinspect/
+│   ├── aggregator/        # implemented: main.go wires config/storage/service/HTTP
+│   └── simulator/         # stub only; not yet implemented
 ├── proto/telemetry/v1/telemetry.proto
-├── gen/telemetry/v1/telemetry.pb.go
+├── gen/telemetry/v1/telemetry.pb.go   # generated; do not hand-edit
 ├── internal/
-│   ├── aggregator/
-│   ├── trips/
-│   ├── storage/
-│   ├── httpapi/
-│   ├── events/
-│   └── control/
-├── migrations/
-├── testdata/
+│   ├── aggregator/        # transactional services: ingest, trip reconstruction, close, queries
+│   ├── trips/             # pure event-time segmentation/merge + completeness logic (no I/O)
+│   ├── storage/           # SQLite migrations, writer coordinator, repositories
+│   ├── wire/              # AG-02 wire codec: strict JSON/protobuf decode, validate, normalize, fingerprint
+│   ├── httpapi/           # net/http handlers, DTOs, router, WebSocket endpoint
+│   ├── events/            # ordered post-commit WebSocket broadcaster (Hub)
+│   ├── control/           # AG-09 simulator control-plane proxy
+│   ├── apierr/            # standard {"error":{...}} envelope and codes
+│   ├── config/            # YAML config loading + validation
+│   ├── clock/             # injectable clock (System / Fixed)
+│   └── idgen/             # injectable trip-ID generator (UUID / Sequential)
+├── migrations/            # embedded ordered *.sql migrations
 ├── routes/
-│   └── fixes.csv
-└── dashboard/
+│   └── sample-route.json  # placeholder; simulator route input format still TBD
+└── dashboard/             # not yet implemented
 ```
 
-Set the module path and the schema's `go_package` consistently. For example, the spec uses module path `gpsdemo` and `go_package = "gpsdemo/gen/telemetry/v1;telemetryv1"`. Replace both together if using a repository-hosted module path.
+Module path is `gpsdemo`, matching the proto's `go_package = "gpsdemo/gen/telemetry/v1;telemetryv1"`.
 
 ## Protobuf generation
 
-The `.proto` file is the source schema. Generate Go types from it; do not hand-edit generated `.pb.go` files. Only telemetry needs Protobuf initially; trip and query models use ordinary Go structures.
+The `.proto` file is the source schema; `gen/telemetry/v1/telemetry.pb.go` is generated from it and checked in. Do not hand-edit it. Only telemetry wire types use Protobuf; trip/query DTOs are ordinary Go structs (`internal/aggregator/dto*.go`).
 
-From the repository root, after creating the module and schema:
+To regenerate after editing the schema, from the repository root:
 
 ```bash
-go get google.golang.org/protobuf
-mkdir -p gen
 protoc \
   --proto_path=proto \
   --go_out=gen \
@@ -163,9 +148,7 @@ protoc \
   proto/telemetry/v1/telemetry.proto
 ```
 
-Expected generated file: `gen/telemetry/v1/telemetry.pb.go`.
-
-Use `protojson` for the telemetry JSON encoding and `proto` for binary serialization. Telemetry JSON examples use lowerCamelCase fields and quoted int64 timestamps; nontelemetry REST APIs use snake_case fields and numeric timestamps. See AG-02 and AG-07 for the complete contracts.
+Use `protojson` for the telemetry JSON encoding and `proto` for binary serialization (both implemented in `internal/wire/codec.go`). Telemetry JSON uses lowerCamelCase fields and quoted int64 timestamps; nontelemetry REST APIs use snake_case fields and numeric timestamps. See AG-02 and AG-07 for the complete contracts.
 
 ## Simulator route input
 
@@ -197,41 +180,38 @@ timestamp_ms = run_start_ms + round(ts × 1000)
 
 `ts=0.0` is valid elapsed time, not Unix epoch zero. Resolve the run start once; do not change fix timestamps when batching, pausing transmission, or draining backlog. Preserve row order and timing. Validate the whole CSV before playback and report malformed rows with their locations. The spec defines rounding, required headers, timestamp validation, and handling of optional diagnostic columns.
 
-Planned simulator defaults:
+**Note:** the CSV format and simulator defaults above describe the *planned* SIM-01..08 implementation, which does not exist yet. `routes/sample-route.json` is a placeholder and not consumed by anything currently.
 
-- Expected sampling interval: 1000 ms
-- Packet size: 10 fixes
-- Clock acceleration: configurable from 10× to 1000×
-- Transmission capacity: 50 packets per **wall-clock** second
-- Live/backlog scheduling: default 3:1 with guaranteed backlog opportunities
-- Packet IDs: UTC `YYYYMMDD-SEQUENCE`, unique within simulator identity across resets/restarts
+## Running the aggregator
 
-Transmission pause simulates a coverage outage while generation continues. Stop halts generation and transmission. At 1000× acceleration, 10 fixes per packet requires 100 packets/s just for live traffic; configure more capacity, such as 200 packets/s, to demonstrate backlog drain. Do not silently discard queued fixes. Automatic retry scheduling is deferred, while aggregator idempotency is required now.
+Build and run with built-in defaults (listens on `127.0.0.1:8080`, database at `./data/gps.sqlite`):
 
-## Aggregator configuration
-
-Proposed baseline values; the configuration file/flag interface remains to be implemented:
-
-```yaml
-listen: 127.0.0.1:8080
-database_path: ./data/gps.sqlite
-trip_gap_seconds: 600
-expected_fix_interval_ms: 1000
-max_body_bytes: 1048576
-max_fixes_per_packet: 10000
-sqlite_busy_timeout_ms: 5000
-websocket_queue_capacity: 256
-simulators: []
+```bash
+go run ./cmd/aggregator
 ```
 
-SQLite uses WAL mode, foreign keys, and durable transactions. Trip gap and expected cadence are persisted with the database; changing them requires an explicit migration/rebuild policy rather than silently reinterpreting existing history. Local database files should be excluded from Git. Keep deterministic test fixtures under version control.
+Or with an explicit config file:
 
-## Planned API surface
+```bash
+go run ./cmd/aggregator -config config.example.yaml
+```
+
+See `config.example.yaml` for every field and its default. Key points:
+
+- `trip_gap_seconds` and `expected_fix_interval_ms` are frozen into the database on first run; starting the same database file again with different values is a startup error (AG-01).
+- `simulators: []` (the default) means the `/api/v1/simulators*` control-proxy routes are not registered at all; add entries to enable them (AG-09).
+- Binds to loopback by default; there is no authentication. This is a local demo.
+
+The server logs structured JSON to stderr and shuts down gracefully on `SIGINT`/`SIGTERM` (finishes in-flight requests, then closes the database).
+
+## API surface (implemented)
+
+For copy-pasteable `curl`/`wget`/browser examples of every endpoint below (including request/response bodies, query parameters, and a worked end-to-end session), see [aggregator.md](aggregator.md).
 
 | Endpoint | Purpose |
 |---|---|
 | `POST /api/v1/telemetry` | JSON or binary Protobuf ingestion |
-| `GET /api/v1/vehicles` | Known vehicles |
+| `GET /api/v1/vehicles` | Known vehicles, paginated |
 | `GET /api/v1/vehicles/{id}` | Latest position, active trip and revision |
 | `GET /api/v1/vehicles/{id}/snapshot` | Coherent vehicle/current-trip snapshot |
 | `GET /api/v1/vehicles/{id}/trips` | Current trip history; optional merged predecessors |
@@ -242,9 +222,14 @@ SQLite uses WAL mode, foreign keys, and durable transactions. Trip gap and expec
 | `POST /api/v1/trips/{id}/close` | Revision-checked manual closure |
 | `WS /api/v1/events?vehicle_id={id}` | Semantic changes with vehicle revisions |
 | `GET /api/v1/health` | Aggregator readiness |
-| `/api/v1/simulators/...` | Fixed simulator status/config/control proxy routes |
+| `GET /api/v1/simulators` | Configured simulator IDs/hints (only if `simulators` is nonempty) |
+| `GET /api/v1/simulators/{id}/status` | Proxies simulator `GET /status` |
+| `PUT /api/v1/simulators/{id}/config` | Proxies simulator `PUT /config` |
+| `POST /api/v1/simulators/{id}/{action}` | Proxies `start`/`stop`/`pause-transmission`/`resume-transmission`/`reset` |
 
-Example JSON ingestion request, **after the aggregator endpoint is implemented**:
+All non-GET methods on a registered path, and GET on a POST-only path, return `405` with an `Allow` header and the standard error envelope.
+
+Example JSON ingestion request:
 
 ```bash
 curl --fail-with-body http://127.0.0.1:8080/api/v1/telemetry \
@@ -265,45 +250,55 @@ curl --fail-with-body http://127.0.0.1:8080/api/v1/telemetry \
 
 Binary packets use the same URL with `Content-Type: application/x-protobuf`. Successful ingestion acknowledges durable acceptance and completed reconstruction; quarantined fixes are reported separately.
 
-## Development and validation
-
-Once the corresponding commands exist, the intended development entry points are:
+Close a trip (requires the current vehicle revision, obtained from an ingest response or `GET .../snapshot`):
 
 ```bash
-go run ./cmd/aggregator
-go run ./cmd/simulator
-go run ./cmd/gpsinspect --help
+curl -X POST http://127.0.0.1:8080/api/v1/trips/<trip-id>/close \
+  -H 'Content-Type: application/json' \
+  --data '{"expected_revision":1,"force":false}'
 ```
 
-Required flags/config paths will be documented when implemented. Do not assume these commands currently start a working system.
+If the trip has internal gaps, this returns `409 TRIP_INCOMPLETE` with a completeness assessment; resubmit with `"force":true` after reviewing it.
 
-Backend checks:
+## Development and validation
 
 ```bash
+go build ./...
 go test ./...
 go test -race ./...
 ```
 
-Prioritize tests for encoding equivalence, idempotency/conflicts, exact 600-second boundaries, shuffled arrival order, merge lineage, manual closure/quarantine, concurrent ingestion/closure, restart durability, and WebSocket snapshot races. Detailed acceptance tests T01–T18 are in the aggregator spec.
+As of this writing, both commands pass cleanly across all implemented packages (120+ tests). Test coverage by spec section:
 
-The planned `gpsinspect` CLI supports vehicle/trip inspection, completeness analysis, closure, event watching, and invariant validation. Its validator should independently check the public API's results rather than call the aggregator's reconstruction code.
+| Package | Covers |
+|---|---|
+| `internal/trips` | AG-05 segmentation/merge algorithm, AG-06 completeness math (pure, no I/O) — T05, T06, T08, T10 |
+| `internal/wire` | AG-02 decode/validate/normalize/fingerprint — T01, T02 |
+| `internal/storage` | AG-03 migrations, metadata freezing, writer coordinator, restart persistence |
+| `internal/events` | AG-08 Hub: delivery, overflow-closes-socket, unsubscribe |
+| `internal/control` | AG-09 proxy: allowlist, timeout, upstream errors, no redirects — T17 |
+| `internal/aggregator` | AG-04 ingestion/idempotency, AG-05 reconstruction integration, AG-06 closure, AG-07 queries/pagination, concurrency, restart, precommit crash-injection, throughput smoke — T03, T04, T07, T09, T11–T15 |
+| `internal/httpapi` | HTTP/WebSocket wiring: content negotiation, error envelope, AG-08 ready/envelope protocol — T16 |
 
-Dashboard setup and run commands will be added after scaffolding. Keep available trips, visible trips, and the selected trip separate in application state; detailed trip visibility UX remains undecided.
+**Precommit crash-injection (T14):** `storage.Store.SetPrecommitFailureHook` installs a test-only hook invoked inside `WithWriteTx` after a transaction's writes are staged but before commit. `TestRestart_PrecommitFailureLeavesNoTrace` and `TestClose_PrecommitFailureLeavesNoTrace` (in `internal/aggregator`) use it to verify a failure at that point rolls back completely — no partial packet/fix/trip/barrier/revision — and that a subsequent retry succeeds cleanly as a fresh attempt.
 
-## Demonstration scenario
+**Throughput smoke test:** `TestSmoke_IngestThroughput` (in `internal/aggregator`) submits 10-fix packets at a target rate and reports actual throughput/latency percentiles; it only fails on an ingestion *error*, never on falling short of the target rate, per the spec's guidance not to sacrifice durability for a number. Default run is 3s at a 1000 fixes/s target (skipped under `go test -short`); override for a heavier run:
 
-1. Start the aggregator and simulator with a known CSV route.
-2. Observe one growing trip and the latest vehicle position.
-3. Pause transmission for more than 600 simulated seconds while generation continues.
-4. Resume with enough transmission capacity to serve live traffic and drain backlog.
-5. Observe a new current trip before delayed data connects the history.
-6. Verify a new merged trip ID, CLOSED/MERGED predecessors, preserved lineage, and no regression of the latest event timestamp.
-7. Attempt closure while a trip has internal missing fixes; observe the warning, explicitly confirm, and verify frozen history.
-8. Deliver a delayed internal fix and a later fix within 600 seconds of the closed end; verify quarantine and a separate future trip.
-9. Restart the aggregator and verify persistence; reconnect event clients through a fresh snapshot.
+```bash
+SMOKE_DURATION_SECONDS=30 SMOKE_FIXES_PER_SEC=1000 go test ./internal/aggregator/ -run TestSmoke -v
+```
 
-Use fixtures and controlled queue scheduling so the intermediate two-trip state is reproducible. The checklist's E2E tasks define the final integration gate.
+T18 (outage/merge/restart through the simulator) is blocked on SIM-01..08, which do not exist yet.
+
+## Decision log (deviations from/clarifications to AGGREGATOR_SPEC.md)
+
+- **SQLite driver:** `modernc.org/sqlite` (pure Go), not a cgo driver, so `go build`/`go test` need no C compiler and work identically in sandboxed environments.
+- **WebSocket library:** `github.com/coder/websocket`, chosen for its context-based API, which maps cleanly onto the per-write deadlines AG-08 requires.
+- **Package split:** the spec's `internal/httpapi` ("codecs, handlers, DTOs, WebSocket") was split into `internal/wire` (pure AG-02 codec/validation/fingerprint, no HTTP or storage dependency) and `internal/httpapi` (actual `net/http` handlers/DTOs/router/WebSocket, depends on `internal/aggregator`). This avoids an import cycle, since AG-07 handlers call into the aggregator service, which itself needs the AG-02 codec for ingestion.
+- **Additional small packages** not explicitly named in AG-01's layout: `internal/clock` (injectable clock), `internal/idgen` (injectable trip-ID generator), `internal/apierr` (shared error codes/envelope), `internal/config` (YAML loading/validation). These are reusable primitives with no cross-dependencies, not restructured domain logic.
+- **Router:** Go 1.22+ `net/http.ServeMux` wildcard path patterns (`{id}`), registered without a method prefix; each handler checks `r.Method` itself and returns the standard JSON error envelope on mismatch (ServeMux's built-in 405 is plain text, which would violate AG-07's consistent-error-shape requirement).
+- **AG-08 subscribe-ready race:** implemented via `storage.Store.WithWriterLock` + `ReadUnderWriterLock`, which reads the vehicle's current revision on the *write* connection (not the read pool, to avoid any replication lag) while holding the same mutex `WithWriteTx` uses, and registers the Hub subscription before releasing it. This guarantees no commit can land between "read ready revision" and "start receiving future commits."
 
 ## Scope and limitations
 
-This is a local demonstration, without authentication or production deployment infrastructure. The initial version omits persistent event replay, automatic simulator retransmission, source-completeness watermarks, reopening closed trips, movement-based segmentation, map matching, and large-scale incremental reconstruction. Detailed dashboard interactions will be designed after the backend and inspector work.
+This is a local demonstration, without authentication or production deployment infrastructure. Deliberately deferred per the spec: persistent event replay, automatic simulator retransmission, source-completeness watermarks, reopening closed trips, movement-based segmentation, map matching, and large-scale incremental reconstruction. The GPS simulator, inspector CLI, and dashboard are not yet implemented (see "Project status" above).

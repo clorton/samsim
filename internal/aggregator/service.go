@@ -1,5 +1,5 @@
 // Package aggregator implements the transactional services that tie
-// together wire decoding (internal/httpapi), pure trip reconciliation
+// together wire decoding (internal/wire), pure trip reconciliation
 // (internal/trips), persistence (internal/storage) and event publication
 // (internal/events): packet ingestion (AG-04), trip reconstruction (AG-05),
 // and manual closure (AG-06).

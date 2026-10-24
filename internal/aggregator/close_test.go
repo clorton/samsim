@@ -2,6 +2,7 @@ package aggregator
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"gpsdemo/internal/apierr"
@@ -9,6 +10,52 @@ import (
 )
 
 func ctxBg() context.Context { return context.Background() }
+
+// TestClose_PrecommitFailureLeavesNoTrace extends T14's crash-injection
+// coverage to AG-06 closure: a failure staged after Close has prepared all
+// writes but before commit must roll back entirely, leaving the trip
+// mutable and the manual barrier absent.
+func TestClose_PrecommitFailureLeavesNoTrace(t *testing.T) {
+	svc, store := newTestService(t)
+	pkt := buildPacket("sim-1", "vehicle-1", "20261024-000001", baseMs, fixSpec{0, 1, 1})
+	res := mustIngest(t, svc, pkt)
+	mutable := listMutableTrips(t, store, "vehicle-1")
+	tripID := mutable[0].TripID
+
+	injected := errors.New("simulated precommit failure")
+	store.SetPrecommitFailureHook(func() error { return injected })
+	_, err := svc.Close(ctxBg(), tripID, res.Revision, false)
+	store.SetPrecommitFailureHook(nil)
+
+	if err == nil || !errors.Is(err, injected) {
+		t.Fatalf("expected injected precommit failure to propagate, got %v", err)
+	}
+
+	// Trip must remain mutable (not CLOSED), and no barrier was inserted.
+	trip := getTrip(t, store, tripID)
+	if trip.Status == storage.TripStatusClosed {
+		t.Fatalf("expected trip to remain unclosed after rolled-back close, got %+v", trip)
+	}
+	barriers := listManualBarriers(t, store, "vehicle-1")
+	if len(barriers) != 0 {
+		t.Fatalf("expected no manual barrier after rolled-back close, got %+v", barriers)
+	}
+
+	// Vehicle revision must be unchanged.
+	vehicle := getVehicle(t, store, "vehicle-1")
+	if vehicle.Revision != res.Revision {
+		t.Fatalf("expected revision unchanged at %d, got %d", res.Revision, vehicle.Revision)
+	}
+
+	// A normal retry of the close must now succeed cleanly.
+	closeRes, err := svc.Close(ctxBg(), tripID, res.Revision, false)
+	if err != nil {
+		t.Fatalf("expected retry close to succeed after rollback, got %v", err)
+	}
+	if closeRes.Status != storage.TripStatusClosed {
+		t.Fatalf("expected retry to actually close the trip, got %+v", closeRes)
+	}
+}
 
 func TestClose_SuccessNoInternalGaps(t *testing.T) {
 	svc, store := newTestService(t)

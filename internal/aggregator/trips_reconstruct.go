@@ -6,9 +6,9 @@ import (
 	"fmt"
 
 	"gpsdemo/internal/events"
-	"gpsdemo/internal/httpapi"
 	"gpsdemo/internal/storage"
 	"gpsdemo/internal/trips"
+	"gpsdemo/internal/wire"
 )
 
 // reconstructOutcome summarizes the effect of one AG-05 reconstruction pass,
@@ -33,7 +33,7 @@ func (s *Service) reconstructTrips(
 	barrierRows []storage.ManualBarrierRow,
 	newRevision int64,
 	nowMs int64,
-	newNonQuarantinedFixes []httpapi.NormalizedFix,
+	newNonQuarantinedFixes []wire.NormalizedFix,
 ) (*reconstructOutcome, error) {
 	existingTripRows, err := storage.ListMutableTripsByVehicle(ctx, tx, vehicleID)
 	if err != nil {
@@ -55,7 +55,7 @@ func (s *Service) reconstructTrips(
 		eligible = append(eligible, members...)
 	}
 
-	newFixesByTs := make(map[int64]httpapi.NormalizedFix, len(newNonQuarantinedFixes))
+	newFixesByTs := make(map[int64]wire.NormalizedFix, len(newNonQuarantinedFixes))
 	for _, f := range newNonQuarantinedFixes {
 		newFixesByTs[f.TimestampMs] = f
 		eligible = append(eligible, f.TimestampMs)
@@ -270,7 +270,7 @@ func (s *Service) reconstructTrips(
 	return outcome, nil
 }
 
-func boundsFromNewFixes(timestamps []int64, byTs map[int64]httpapi.NormalizedFix) (minLat, maxLat, minLon, maxLon float64, startMs, endMs int64) {
+func boundsFromNewFixes(timestamps []int64, byTs map[int64]wire.NormalizedFix) (minLat, maxLat, minLon, maxLon float64, startMs, endMs int64) {
 	startMs, endMs = timestamps[0], timestamps[0]
 	for i, ts := range timestamps {
 		f := byTs[ts]

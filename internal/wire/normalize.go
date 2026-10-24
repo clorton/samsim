@@ -1,4 +1,4 @@
-package httpapi
+package wire
 
 import (
 	"crypto/sha256"
