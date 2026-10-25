@@ -1,0 +1,220 @@
+// This file implements SIM-06's PUT /config: a partial, validated,
+// atomically-applied update to a whitelisted subset of effective run
+// fields.
+package simulator
+
+import (
+	"fmt"
+	"time"
+)
+
+// ConfigUpdate is a partial update to the engine's effective configuration
+// (SIM-06 PUT /config). Nil fields are left unchanged. At least one
+// non-nil field is required.
+type ConfigUpdate struct {
+	// Hot fields: applied atomically regardless of playback state.
+	ClockMultiplier     *float64
+	MaxPacketsPerSecond *float64
+	LiveWeight          *int
+	BacklogWeight       *int
+	PartialFlushWallMs  *int64
+
+	// Fields requiring no pending/in-flight packet.
+	PacketSize       *int
+	Encoding         *string
+	RequestTimeoutMs *int64
+
+	// Fields requiring READY with no pending records.
+	VehicleID             *string
+	RouteID               *string
+	RunStartMs            *RunStart
+	AggregatorURL         *string
+	ExpectedFixIntervalMs *int64
+
+	ExpectedControlRevision *int64
+}
+
+// ErrControlRevisionConflict is returned when ExpectedControlRevision is
+// supplied and stale.
+var ErrControlRevisionConflict = fmt.Errorf("simulator: expected_control_revision is stale")
+
+// ErrNoFieldsProvided is returned when a ConfigUpdate has no fields set.
+var ErrNoFieldsProvided = fmt.Errorf("simulator: config update requires at least one field")
+
+// ErrFieldRequiresNoPending is returned when packet_size/encoding/
+// request_timeout_ms is changed while a pending/in-flight packet exists.
+var ErrFieldRequiresNoPending = fmt.Errorf("simulator: this field cannot change while a packet is pending or in flight")
+
+// ErrFieldRequiresReadyEmpty is returned when vehicle_id/route_id/
+// run_start_ms/aggregator_url/expected_fix_interval_ms is changed outside
+// READY-with-no-pending-records.
+var ErrFieldRequiresReadyEmpty = fmt.Errorf("simulator: this field can only change in READY state with no pending records; reset first")
+
+// ErrInvalidRoute wraps a route_id change's load/validation failure, so
+// HTTP handlers can map it to INVALID_ROUTE rather than the generic
+// INVALID_CONFIG.
+var ErrInvalidRoute = fmt.Errorf("simulator: invalid route")
+
+func (u ConfigUpdate) isEmpty() bool {
+	return u.ClockMultiplier == nil && u.MaxPacketsPerSecond == nil && u.LiveWeight == nil &&
+		u.BacklogWeight == nil && u.PartialFlushWallMs == nil && u.PacketSize == nil &&
+		u.Encoding == nil && u.RequestTimeoutMs == nil && u.VehicleID == nil &&
+		u.RouteID == nil && u.RunStartMs == nil && u.AggregatorURL == nil &&
+		u.ExpectedFixIntervalMs == nil
+}
+
+// PutConfig implements PUT /config (SIM-06). It validates the entire
+// update (including, for an accepted route_id change, loading/validating
+// the new route off-lock) before applying any of it, then atomically
+// applies all changes together.
+func (e *Engine) PutConfig(update ConfigUpdate) error {
+	if update.isEmpty() {
+		return ErrNoFieldsProvided
+	}
+
+	e.controlMu.Lock()
+	defer e.controlMu.Unlock()
+
+	// Snapshot current config/revision for off-lock validation.
+	e.mu.Lock()
+	currentRevision := e.controlRevision
+	currentCfg := e.cfg
+	playbackState := e.playbackState
+	hasPending := e.pending != nil
+	totalUnsent := e.totalUnsentLocked()
+	e.mu.Unlock()
+
+	if update.ExpectedControlRevision != nil && *update.ExpectedControlRevision != currentRevision {
+		return ErrControlRevisionConflict
+	}
+
+	noPendingFields := update.PacketSize != nil || update.Encoding != nil || update.RequestTimeoutMs != nil
+	if noPendingFields && hasPending {
+		return ErrFieldRequiresNoPending
+	}
+
+	readyEmptyFields := update.VehicleID != nil || update.RouteID != nil || update.RunStartMs != nil ||
+		update.AggregatorURL != nil || update.ExpectedFixIntervalMs != nil
+	if readyEmptyFields {
+		if playbackState != PlaybackReady {
+			return ErrFieldRequiresReadyEmpty
+		}
+		if totalUnsent != 0 {
+			return ErrFieldRequiresReadyEmpty
+		}
+	}
+
+	newCfg := currentCfg
+	if update.ClockMultiplier != nil {
+		newCfg.ClockMultiplier = *update.ClockMultiplier
+	}
+	if update.MaxPacketsPerSecond != nil {
+		newCfg.MaxPacketsPerSecond = *update.MaxPacketsPerSecond
+	}
+	if update.LiveWeight != nil {
+		newCfg.LiveWeight = *update.LiveWeight
+	}
+	if update.BacklogWeight != nil {
+		newCfg.BacklogWeight = *update.BacklogWeight
+	}
+	if update.PartialFlushWallMs != nil {
+		newCfg.PartialFlushWallMs = *update.PartialFlushWallMs
+	}
+	if update.PacketSize != nil {
+		newCfg.PacketSize = *update.PacketSize
+	}
+	if update.Encoding != nil {
+		newCfg.Encoding = *update.Encoding
+	}
+	if update.RequestTimeoutMs != nil {
+		newCfg.RequestTimeoutMs = *update.RequestTimeoutMs
+	}
+	if update.VehicleID != nil {
+		newCfg.VehicleID = *update.VehicleID
+	}
+	if update.RouteID != nil {
+		newCfg.RouteID = *update.RouteID
+	}
+	if update.RunStartMs != nil {
+		newCfg.RunStartMs = *update.RunStartMs
+	}
+	if update.AggregatorURL != nil {
+		newCfg.AggregatorURL = *update.AggregatorURL
+	}
+	if update.ExpectedFixIntervalMs != nil {
+		newCfg.ExpectedFixIntervalMs = *update.ExpectedFixIntervalMs
+	}
+
+	if err := newCfg.Validate(); err != nil {
+		return fmt.Errorf("simulator: config update: %w", err)
+	}
+
+	// Off-lock: load/validate a newly selected route before applying
+	// anything, and build a new Sender if aggregator_url/request_timeout
+	// changed (constructing an http.Client is cheap/pure, no network I/O
+	// occurs here).
+	var newRouteData []byte
+	routeChanged := update.RouteID != nil && *update.RouteID != currentCfg.RouteID
+	if routeChanged {
+		if e.routeLoader == nil {
+			return fmt.Errorf("simulator: config update: route_id change requested but no route loader is configured")
+		}
+		data, err := e.routeLoader(newCfg.RouteID)
+		if err != nil {
+			return fmt.Errorf("%w: load route %q: %v", ErrInvalidRoute, newCfg.RouteID, err)
+		}
+		if _, err := LoadRouteCSV(data, LoadRouteCSVOptions{
+			ResolvedRunStartMs: 1,
+			MaxBytes:           newCfg.MaxRouteBytes,
+			MaxRows:            newCfg.MaxRouteRows,
+		}); err != nil {
+			return fmt.Errorf("%w: validate route %q: %v", ErrInvalidRoute, newCfg.RouteID, err)
+		}
+		newRouteData = data
+	}
+
+	var newSender packetSender
+	senderFieldsChanged := update.AggregatorURL != nil || update.RequestTimeoutMs != nil
+	if senderFieldsChanged {
+		telemetryURL, err := ValidateAggregatorURL(newCfg.AggregatorURL)
+		if err != nil {
+			return fmt.Errorf("simulator: config update: %w", err)
+		}
+		newSender = NewSender(telemetryURL, time.Duration(newCfg.RequestTimeoutMs)*time.Millisecond)
+	}
+
+	// Atomically apply, re-checking the revision still matches (SIM-06:
+	// "atomically apply only if state/config revision still matches").
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.controlRevision != currentRevision {
+		return ErrControlRevisionConflict
+	}
+	// Re-verify preconditions that could have changed between snapshot and
+	// apply (defensive; controlMu already serializes control operations,
+	// so in practice this cannot fail if it didn't fail above, but the
+	// engine's own background Tick loop can change hasPending/unsent
+	// state concurrently with us holding only controlMu, not mu, during
+	// the off-lock phase above).
+	if noPendingFields && e.pending != nil {
+		return ErrFieldRequiresNoPending
+	}
+	if readyEmptyFields && (e.playbackState != PlaybackReady || e.totalUnsentLocked() != 0) {
+		return ErrFieldRequiresReadyEmpty
+	}
+
+	e.cfg = newCfg
+	e.fairness.SetWeights(newCfg.LiveWeight, newCfg.BacklogWeight)
+	e.vclock.SetMultiplier(newCfg.ClockMultiplier)
+	if newRouteData != nil {
+		e.routeData = newRouteData
+		e.routeID = newCfg.RouteID
+		e.route = nil // not resolved until next Start
+	}
+	if newSender != nil {
+		e.sender = newSender
+	}
+	e.controlRevision++
+
+	return nil
+}

@@ -1,0 +1,21 @@
+{
+  "listen": "127.0.0.1:8090",
+  "simulator_id": "sim-001",
+  "vehicle_id": "vehicle-001",
+  "aggregator_url": "http://127.0.0.1:8080",
+  "routes": { "demo": "./routes/fixes.csv" },
+  "route_id": "demo",
+  "run_start_ms": "now",
+  "clock_multiplier": 100,
+  "expected_fix_interval_ms": 1000,
+  "packet_size": 10,
+  "encoding": "json",
+  "max_packets_per_second": 50,
+  "live_weight": 3,
+  "backlog_weight": 1,
+  "partial_flush_wall_ms": 200,
+  "request_timeout_ms": 2000,
+  "identity_db_path": "./data/simulator-identity.sqlite",
+  "max_route_bytes": 67108864,
+  "max_route_rows": 1000000
+}
