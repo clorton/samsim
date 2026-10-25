@@ -6,13 +6,13 @@ The backend uses Go and SQLite. The planned dashboard uses React, TypeScript, Vi
 
 ## Project status
 
-**The aggregator (AG-01 through AG-10) and the GPS simulator (SIM-01 through SIM-07) are implemented and runnable**, including a real, automated end-to-end integration test (the simulator driving a real aggregator through a >600-second outage, producing two trips that later merge with correct lineage). The inspector CLI and dashboard are not yet implemented.
+**The aggregator (AG-01 through AG-10), the GPS simulator (SIM-01 through SIM-07), and the inspector CLI `gpsinspect` (INS-01 through INS-06) are implemented and runnable**, including a real, automated end-to-end integration test (the simulator driving a real aggregator through a >600-second outage, producing two trips that later merge with correct lineage) and a second real end-to-end test exercising `gpsinspect` itself against a real aggregator through that same outage/merge scenario plus a forced close and a saved immutability baseline. The dashboard is not yet implemented.
 
 Implementation order:
 
 1. **Aggregator — done** (see "Running the aggregator" below)
 2. **GPS simulator — done** (see "Running the simulator" below)
-3. Inspector CLI — not started
+3. **Inspector CLI — done** (see "Using the inspector" below)
 4. Minimal dashboard — not started
 
 Track work in [TODO.md](TODO.md). The normative contracts are [AGGREGATOR_SPEC.md](AGGREGATOR_SPEC.md) and [SIMULATOR_SPEC.md](SIMULATOR_SPEC.md); their `AG-*`/`SIM-*` IDs match the checklist. If this README and a detailed spec differ, follow the spec and update this README.

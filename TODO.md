@@ -44,12 +44,12 @@ Dependencies: AG-01 → AG-02/03 → AG-04 → AG-05 → AG-06; AG-07/08 depend 
 
 ## 3. Inspector — Go CLI `gpsinspect` (P0)
 
-- [ ] **INS-01** Add `cmd/gpsinspect` with Cobra, base URL/timeout flags, human output plus `--json`, nonzero failure exit codes. Use public HTTP APIs exclusively.
-- [ ] **INS-02** Implement `vehicles`, `vehicle <id>`, `trips <vehicle>`, `trip <id>`, `gaps <trip>`; show status, closure reason, boundaries, counts, bounds, lineage, unassigned telemetry, and completeness uncertainty (AG-07).
-- [ ] **INS-03** Implement `close <trip>`: inspect completeness, send expected revision, display warning, require explicit `--force` or interactive confirmation for internal gaps. Noninteractive mode never silently confirms; stale revision requires reread (AG-06).
-- [ ] **INS-04** Implement `watch <vehicle>` using ready/subscription, revision checks, reconnect/resnapshot (AG-08).
-- [ ] **INS-05** Implement `validate <vehicle>` using raw fixes plus snapshot/geometry reads pinned to the same revision. Independently check unique current membership, temporal components within manual barriers, frozen closed snapshots, lineage, latest position, and active pointer. Do not reuse aggregator reconstruction code; closed snapshot immutability needs persisted prior observations or comparison across a test sequence.
-- [ ] **INS-06** Test commands against fixture server and real aggregator; **G5:** inspect and validate outage/merge/forced-close scenarios without opening SQLite.
+- [x] **INS-01** Add `cmd/gpsinspect` with Cobra, base URL/timeout flags, human output plus `--json`, nonzero failure exit codes. Use public HTTP APIs exclusively.
+- [x] **INS-02** Implement `vehicles`, `vehicle <id>`, `trips <vehicle>`, `trip <id>`, `gaps <trip>`; show status, closure reason, boundaries, counts, bounds, lineage, unassigned telemetry, and completeness uncertainty (AG-07).
+- [x] **INS-03** Implement `close <trip>`: inspect completeness, send expected revision, display warning, require explicit `--force` or interactive confirmation for internal gaps. Noninteractive mode never silently confirms; stale revision requires reread (AG-06).
+- [x] **INS-04** Implement `watch <vehicle>` using ready/subscription, revision checks, reconnect/resnapshot (AG-08).
+- [x] **INS-05** Implement `validate <vehicle>` using raw fixes plus snapshot/geometry reads pinned to the same revision. Independently check unique current membership, temporal components within manual barriers, frozen closed snapshots, lineage, latest position, and active pointer. Do not reuse aggregator reconstruction code; closed snapshot immutability needs persisted prior observations or comparison across a test sequence.
+- [x] **INS-06** Test commands against fixture server and real aggregator; **G5:** inspect and validate outage/merge/forced-close scenarios without opening SQLite. Verified end-to-end against a real running aggregator (`TestI16_ListInspectOutageRecoveryValidateMergedForceClose`), including outage/merge, validate on merged state, forced close of an incomplete trip, and a saved/reread immutability baseline.
 - [ ] **INS-07 — P1** Add independent Python randomized model/fixture generator after Go inspector works.
 
 ## 4. Dashboard — minimal foundation (P0; UX details deferred)

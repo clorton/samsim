@@ -4,3 +4,7 @@
 *.sqlite-shm
 /dashboard/node_modules/
 /dashboard/dist/
+/bin/
+/gpsinspect
+/aggregator
+/simulator
