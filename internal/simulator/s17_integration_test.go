@@ -28,7 +28,7 @@ func TestS17_BothEncodingsWorkAgainstRealAggregator(t *testing.T) {
 			cfg.Encoding = encoding
 			cfg.ClockMultiplier = 100
 			cfg.PacketSize = 10
-			cfg.PartialFlushWallMs = 50
+			cfg.NormalReportIntervalSimulatedMs = 1000 // closes a window every simulated second (1 fix at 1Hz)
 			if err := cfg.Validate(); err != nil {
 				t.Fatalf("invalid config: %v", err)
 			}

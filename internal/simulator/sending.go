@@ -1,13 +1,14 @@
 // This file implements SIM-03/04/05's packet selection, identity
-// allocation, and send dispatch. prepareSendAttemptLocked (called under
-// e.mu from Tick) decides whether an attempt should be made right now,
-// applying the recovery gate, fairness selection, lane eligibility, rate
-// limiting, and the single-in-flight rule, and if so selects records and
-// marks them pending. The actual identity allocation and HTTP POST happen
-// in a separate goroutine (dispatchSend) without holding e.mu, per SIM-06's
-// "do not hold the state owner while doing network or file I/O"; Tick
-// launches that goroutine and returns immediately so generation and
-// control responsiveness are never blocked by a slow/stuck send.
+// allocation, and send dispatch, as amended by SIMULATOR_CHANGE_REQUEST.md.
+// prepareSendAttemptLocked (called under e.mu from Tick) decides whether an
+// attempt should be made right now, applying the fresh-first preference,
+// fairness selection, lane eligibility, rate limiting, and the
+// single-in-flight rule, and if so selects records and marks them pending.
+// The actual identity allocation and HTTP POST happen in a separate
+// goroutine (dispatchSend) without holding e.mu, per SIM-06's "do not hold
+// the state owner while doing network or file I/O"; Tick launches that
+// goroutine and returns immediately so generation and control
+// responsiveness are never blocked by a slow/stuck send.
 package simulator
 
 import (
@@ -100,9 +101,9 @@ func (e *Engine) prepareSendAttemptLocked() *sendAttempt {
 }
 
 // rateAllowsAttemptLocked enforces SIM-05's monotonic wall-clock spacing:
-// attempts are at least 1/max_packets_per_second apart, anchored on the
-// last actual attempt (no burst credit accumulation). Caller must hold
-// e.mu.
+// attempts are at least 1/(max_packets_per_simulated_second*clock_
+// multiplier) apart, anchored on the last actual attempt (no burst credit
+// accumulation). Caller must hold e.mu.
 func (e *Engine) rateAllowsAttemptLocked() bool {
 	if !e.haveLastAttempt {
 		return true
@@ -125,27 +126,47 @@ func (e *Engine) markAttemptStartedLocked() {
 		e.pending.retryAuthorized = false
 	}
 	e.packetsAttempted++
+	e.attemptedSamples = pruneSamples(append(e.attemptedSamples, rateSample{atMono: e.lastAttemptMonoTime, count: e.packetsAttempted}), e.lastAttemptMonoTime)
 }
 
-// selectOrdinaryLocked implements SIM-04's recovery gate plus weighted
-// fairness selection for a brand-new (non-retry) ordinary attempt. Caller
-// must hold e.mu.
+// selectOrdinaryLocked implements the fresh-first recovery preference plus
+// weighted fairness selection for a brand-new (non-retry) ordinary attempt,
+// per SIMULATOR_CHANGE_REQUEST.md. Unlike the prior recovery gate, this
+// never blocks: if freshFirstPending is armed (set by ResumeTransmission)
+// and live has any eligible records, this attempt prefers live once,
+// consuming the one-shot preference; otherwise (live not yet ready, or the
+// preference already consumed) ordinary weighted fairness decides, and
+// backlog remains free to send even with nothing live available ( "Never
+// wait for another normal report deadline when backlog is eligible and no
+// live report is ready"). Caller must hold e.mu.
 func (e *Engine) selectOrdinaryLocked() (lane Lane, recordIdx int, ok bool) {
-	if e.recoveryWaitingForLive {
-		routeExhausted := e.generatedCursor >= len(e.route)
-		if !routeExhausted {
-			// Gate still armed and more route points may yet arrive: only
-			// live is eligible, and only once it actually has >=1 record
-			// (do not force-flush an empty lane).
-			if len(e.liveQueue) == 0 {
-				return "", 0, false
-			}
-			e.recoveryWaitingForLive = false
+	if e.freshFirstPending {
+		// "one immediate live report may contain the latest reporting
+		// window, even if partial": force-close just the open live window
+		// (not backlog) so any fixes generated since resume become eligible
+		// now rather than waiting for the normal boundary.
+		if len(e.liveQueue) == 0 && len(e.liveWindowAccum) > 0 {
+			e.liveQueue = append(e.liveQueue, e.liveWindowAccum...)
+			e.liveWindowAccum = nil
+		}
+		if len(e.liveQueue) > 0 {
+			e.freshFirstPending = false
 			return LaneLive, 0, true
 		}
-		// EOF already reached: drain immediately via ordinary eligibility
-		// below, no live will ever come.
-		e.recoveryWaitingForLive = false
+		if !e.isLaneEligibleLocked(e.backlogQueue) {
+			// Nothing eligible yet at all; leave the preference armed for a
+			// later tick once something becomes available.
+			return "", 0, false
+		}
+		// Live isn't ready yet but backlog is: per spec, never block backlog
+		// on a future live fix. Fall through to ordinary fairness below. If
+		// the route is already exhausted, no live record will ever arrive,
+		// so consume the preference now rather than re-checking forever;
+		// otherwise leave it armed so a later attempt still prefers live as
+		// soon as it becomes eligible.
+		if e.generatedCursor >= len(e.route) {
+			e.freshFirstPending = false
+		}
 	}
 
 	elig := LaneEligibility{

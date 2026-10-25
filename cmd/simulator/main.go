@@ -51,9 +51,10 @@ func run() error {
 		"aggregator_url", cfg.AggregatorURL,
 		"route_id", cfg.RouteID,
 		"clock_multiplier", cfg.ClockMultiplier,
+		"normal_report_interval_simulated_ms", cfg.NormalReportIntervalSimulatedMs,
 		"packet_size", cfg.PacketSize,
 		"encoding", cfg.Encoding,
-		"max_packets_per_second", cfg.MaxPacketsPerSecond,
+		"max_packets_per_simulated_second", cfg.MaxPacketsPerSimulatedSecond,
 	)
 
 	if dir := filepath.Dir(cfg.IdentityDBPath); dir != "." {

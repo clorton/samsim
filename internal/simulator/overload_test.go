@@ -6,16 +6,18 @@ import (
 )
 
 // TestOverload_QueueGrowthAndCongestionNoDrop implements the spec's
-// overload test: at multiplier=1000, packet_size=10, rate=50, live demand
-// (~100 packets/s) exceeds configured capacity (50/s), so queue growth and
-// congested=true are expected, but no fixes may ever be dropped (the
-// conservation invariant must still hold).
+// overload test: at multiplier=1000 with a 10-simulated-second report
+// interval and a 1 Hz source, each closed window holds ~10 fixes, closing
+// at an actual rate of 100 reports/s (10000ms/1000 -> 10ms actual interval
+// -> 100/s demand). Configuring capacity below that demand (50/s actual)
+// means queue growth and congested=true are expected, but no fixes may
+// ever be dropped (the conservation invariant must still hold).
 func TestOverload_QueueGrowthAndCongestionNoDrop(t *testing.T) {
 	e, deps := newTestEngine(t, func(c *Config) {
 		c.ClockMultiplier = 1000
 		c.PacketSize = 10
-		c.PartialFlushWallMs = 50
-		c.MaxPacketsPerSecond = 50 // insufficient for ~100 packets/s demand at this multiplier/size
+		c.NormalReportIntervalSimulatedMs = 10000 // 10 actual ms per window at this multiplier -> 100 reports/s demand
+		c.MaxPacketsPerSimulatedSecond = 0.05     // *1000 -> 50/s actual: insufficient for 100/s demand
 	}, buildRouteCSV(10_000))
 
 	e.Start()
@@ -60,13 +62,15 @@ func TestOverload_QueueGrowthAndCongestionNoDrop(t *testing.T) {
 
 // TestOverload_AdequateRateEventuallyDrains implements the spec's
 // complementary claim: "At adequate rate, finite-route EOF must eventually
-// drain if the aggregator responds successfully."
+// drain if the aggregator responds successfully." 0.3 packets/simulated
+// second at 1000x multiplier is 300/s actual, comfortably above the ~100/s
+// demand implied by a 10-simulated-second report interval at 1 Hz.
 func TestOverload_AdequateRateEventuallyDrains(t *testing.T) {
 	e, deps := newTestEngine(t, func(c *Config) {
 		c.ClockMultiplier = 1000
 		c.PacketSize = 10
-		c.PartialFlushWallMs = 50
-		c.MaxPacketsPerSecond = 200 // adequate per spec's guidance
+		c.NormalReportIntervalSimulatedMs = 10000
+		c.MaxPacketsPerSimulatedSecond = 0.3 // *1000 -> 300/s actual: adequate per spec's guidance
 	}, buildRouteCSV(2000)) // finite, modest route so EOF is reached quickly
 
 	e.Start()

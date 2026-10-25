@@ -48,48 +48,65 @@ func (r *RunStart) UnmarshalJSON(data []byte) error {
 }
 
 // Config is the simulator's complete startup configuration (SIM-01).
+//
+// Per the "separate normal reporting from transmission capacity" change
+// request, NormalReportIntervalSimulatedMs controls WHEN live reports
+// (packets) are created from newly generated fixes, while
+// MaxPacketsPerSimulatedSecond controls the combined live+backlog send
+// capacity. These are independent schedules: the first is a simulated-time
+// clock (one report per window, regardless of transmission capacity); the
+// second is a rate ceiling scaled by ClockMultiplier into an actual
+// (wall-clock) packets/second limit. PacketSize remains only as a safety
+// bound: if a closed report window contains more fixes than PacketSize, it
+// is split into multiple bounded packets at the window's deadline, never
+// deferred to a later window.
 type Config struct {
-	Listen                string            `json:"listen"`
-	SimulatorID           string            `json:"simulator_id"`
-	VehicleID             string            `json:"vehicle_id"`
-	AggregatorURL         string            `json:"aggregator_url"`
-	Routes                map[string]string `json:"routes"`
-	RouteID               string            `json:"route_id"`
-	RunStartMs            RunStart          `json:"run_start_ms"`
-	ClockMultiplier       float64           `json:"clock_multiplier"`
-	ExpectedFixIntervalMs int64             `json:"expected_fix_interval_ms"`
-	PacketSize            int               `json:"packet_size"`
-	Encoding              string            `json:"encoding"`
-	MaxPacketsPerSecond   float64           `json:"max_packets_per_second"`
-	LiveWeight            int               `json:"live_weight"`
-	BacklogWeight         int               `json:"backlog_weight"`
-	PartialFlushWallMs    int64             `json:"partial_flush_wall_ms"`
-	RequestTimeoutMs      int64             `json:"request_timeout_ms"`
-	IdentityDBPath        string            `json:"identity_db_path"`
-	MaxRouteBytes         int64             `json:"max_route_bytes"`
-	MaxRouteRows          int64             `json:"max_route_rows"`
+	Listen                          string            `json:"listen"`
+	SimulatorID                     string            `json:"simulator_id"`
+	VehicleID                       string            `json:"vehicle_id"`
+	AggregatorURL                   string            `json:"aggregator_url"`
+	Routes                          map[string]string `json:"routes"`
+	RouteID                         string            `json:"route_id"`
+	RunStartMs                      RunStart          `json:"run_start_ms"`
+	ClockMultiplier                 float64           `json:"clock_multiplier"`
+	ExpectedFixIntervalMs           int64             `json:"expected_fix_interval_ms"`
+	NormalReportIntervalSimulatedMs int64             `json:"normal_report_interval_simulated_ms"`
+	PacketSize                      int               `json:"packet_size"`
+	Encoding                        string            `json:"encoding"`
+	MaxPacketsPerSimulatedSecond    float64           `json:"max_packets_per_simulated_second"`
+	LiveWeight                      int               `json:"live_weight"`
+	BacklogWeight                   int               `json:"backlog_weight"`
+	RequestTimeoutMs                int64             `json:"request_timeout_ms"`
+	IdentityDBPath                  string            `json:"identity_db_path"`
+	MaxRouteBytes                   int64             `json:"max_route_bytes"`
+	MaxRouteRows                    int64             `json:"max_route_rows"`
 }
 
 // Default returns the spec's example configuration values, useful as a
 // starting point for tests and documentation; callers must still set
 // simulator-specific fields (routes, identity_db_path, etc.) appropriately.
+//
+// MaxPacketsPerSimulatedSecond defaults to 0.2, deliberately just above the
+// ~0.1 packets/simulated-second demand implied by the default 10-second
+// report interval at a 1 Hz source cadence, so that a recovery backlog
+// drain is slow enough to observe rather than instantaneous.
 func Default() Config {
 	return Config{
-		Listen:                "127.0.0.1:8090",
-		AggregatorURL:         "http://127.0.0.1:8080",
-		RunStartMs:            RunStart{IsNow: true},
-		ClockMultiplier:       100,
-		ExpectedFixIntervalMs: 1000,
-		PacketSize:            10,
-		Encoding:              "json",
-		MaxPacketsPerSecond:   50,
-		LiveWeight:            3,
-		BacklogWeight:         1,
-		PartialFlushWallMs:    200,
-		RequestTimeoutMs:      2000,
-		IdentityDBPath:        "./data/simulator-identity.sqlite",
-		MaxRouteBytes:         64 << 20,
-		MaxRouteRows:          1_000_000,
+		Listen:                          "127.0.0.1:8090",
+		AggregatorURL:                   "http://127.0.0.1:8080",
+		RunStartMs:                      RunStart{IsNow: true},
+		ClockMultiplier:                 100,
+		ExpectedFixIntervalMs:           1000,
+		NormalReportIntervalSimulatedMs: 10000,
+		PacketSize:                      10,
+		Encoding:                        "json",
+		MaxPacketsPerSimulatedSecond:    0.2,
+		LiveWeight:                      3,
+		BacklogWeight:                   1,
+		RequestTimeoutMs:                2000,
+		IdentityDBPath:                  "./data/simulator-identity.sqlite",
+		MaxRouteBytes:                   64 << 20,
+		MaxRouteRows:                    1_000_000,
 	}
 }
 
@@ -172,23 +189,23 @@ func (c *Config) Validate() error {
 	if c.ExpectedFixIntervalMs <= 0 {
 		return fmt.Errorf("config: expected_fix_interval_ms must be positive, got %d", c.ExpectedFixIntervalMs)
 	}
+	if c.NormalReportIntervalSimulatedMs <= 0 {
+		return fmt.Errorf("config: normal_report_interval_simulated_ms must be positive, got %d", c.NormalReportIntervalSimulatedMs)
+	}
 	if c.PacketSize < 1 || c.PacketSize > 10000 {
 		return fmt.Errorf("config: packet_size must be an integer in [1,10000], got %d", c.PacketSize)
 	}
 	if c.Encoding != "json" && c.Encoding != "protobuf" {
 		return fmt.Errorf("config: encoding must be \"json\" or \"protobuf\", got %q", c.Encoding)
 	}
-	if math.IsNaN(c.MaxPacketsPerSecond) || math.IsInf(c.MaxPacketsPerSecond, 0) || c.MaxPacketsPerSecond <= 0 || c.MaxPacketsPerSecond > 10000 {
-		return fmt.Errorf("config: max_packets_per_second must be finite in (0,10000], got %v", c.MaxPacketsPerSecond)
+	if math.IsNaN(c.MaxPacketsPerSimulatedSecond) || math.IsInf(c.MaxPacketsPerSimulatedSecond, 0) || c.MaxPacketsPerSimulatedSecond <= 0 || c.MaxPacketsPerSimulatedSecond > 10000 {
+		return fmt.Errorf("config: max_packets_per_simulated_second must be finite in (0,10000], got %v", c.MaxPacketsPerSimulatedSecond)
 	}
 	if c.LiveWeight < 1 || c.LiveWeight > 100 {
 		return fmt.Errorf("config: live_weight must be an integer in [1,100], got %d", c.LiveWeight)
 	}
 	if c.BacklogWeight < 1 || c.BacklogWeight > 100 {
 		return fmt.Errorf("config: backlog_weight must be an integer in [1,100], got %d", c.BacklogWeight)
-	}
-	if c.PartialFlushWallMs <= 0 {
-		return fmt.Errorf("config: partial_flush_wall_ms must be positive, got %d", c.PartialFlushWallMs)
 	}
 	if c.RequestTimeoutMs <= 0 {
 		return fmt.Errorf("config: request_timeout_ms must be positive, got %d", c.RequestTimeoutMs)

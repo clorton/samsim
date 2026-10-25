@@ -125,8 +125,13 @@ func TestS18_OutageProducesTwoTripsThenMerge(t *testing.T) {
 	cfg.RunStartMs = RunStart{FixedMs: 1_700_000_000_000}
 	cfg.ClockMultiplier = 1000
 	cfg.PacketSize = 10
-	cfg.PartialFlushWallMs = 50
-	cfg.MaxPacketsPerSecond = 10000
+	// 10 simulated seconds per report, matching ExpectedFixIntervalMs's
+	// default 1Hz source cadence, normally yields 10 fixes/report (matching
+	// PacketSize); at 1000x multiplier that is a 10ms actual interval.
+	cfg.NormalReportIntervalSimulatedMs = 10000
+	// 10 packets/simulated-second * 1000x multiplier = 10000/s actual,
+	// comfortably enough capacity to drain backlog within this test.
+	cfg.MaxPacketsPerSimulatedSecond = 10
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("invalid config: %v", err)
 	}
@@ -238,8 +243,31 @@ func TestS18_OutageProducesTwoTripsThenMerge(t *testing.T) {
 		mono.Advance(1 * time.Microsecond)
 		time.Sleep(50 * time.Microsecond)
 	}
+
+	// Any still-unsent fixes at this point are legitimately sitting in the
+	// current open report window, which has not yet reached its simulated-
+	// time boundary (SIMULATOR_CHANGE_REQUEST.md: windows close purely on
+	// elapsed simulated time, never merely because capacity is available).
+	// The route is intentionally far from exhausted, so EOF won't seal it;
+	// force the trailing window closed the same way an operator would
+	// (stop, shrink the interval, resume) so the test can assert a true
+	// zero-unsent end state rather than leaving an artificial tail.
+	if e.Status().TotalUnsentFixes > 0 {
+		e.Stop()
+		tinyInterval := int64(1)
+		if err := e.PutConfig(ConfigUpdate{NormalReportIntervalSimulatedMs: &tinyInterval}); err != nil {
+			t.Fatalf("seal trailing window: %v", err)
+		}
+		e.Start()
+		for i := 0; i < 20000 && e.Status().TotalUnsentFixes > 0; i++ {
+			tick()
+			mono.Advance(1 * time.Microsecond)
+			time.Sleep(50 * time.Microsecond)
+		}
+	}
 	if e.Status().TotalUnsentFixes != 0 {
-		t.Fatalf("expected all queues to fully drain, got %d unsent (live=%d backlog=%d)", e.Status().TotalUnsentFixes, e.Status().LiveQueueCount, e.Status().BacklogQueueCount)
+		t.Fatalf("expected all queues to fully drain, got %d unsent (live=%d backlog=%d live_pending=%d backlog_pending=%d)",
+			e.Status().TotalUnsentFixes, e.Status().LiveQueueCount, e.Status().BacklogQueueCount, e.Status().LiveWindowPendingCount, e.Status().BacklogWindowPendingCount)
 	}
 
 	tripsAfterDrain := aggregatorTrips(t, aggURL.URL, vehicleID)

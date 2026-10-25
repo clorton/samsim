@@ -32,9 +32,9 @@ func TestEngine_QueueInvariant_RandomizedOperations(t *testing.T) {
 		r := rand.New(rand.NewSource(seed))
 		e, deps := newTestEngine(t, func(c *Config) {
 			c.PacketSize = 3
-			c.PartialFlushWallMs = 50
+			c.NormalReportIntervalSimulatedMs = 500 // small, so windows close frequently within this test's virtual time range
 			c.ClockMultiplier = 50
-			c.MaxPacketsPerSecond = 1000
+			c.MaxPacketsPerSimulatedSecond = 1000
 		}, buildRouteCSV(5000))
 
 		var failNext atomic.Bool
@@ -93,8 +93,11 @@ func TestEngine_QueueInvariant_RandomizedOperations(t *testing.T) {
 // none duplicated in queue membership).
 func TestEngine_NoBacklogLossAcrossMultipleOutages(t *testing.T) {
 	e, deps := newTestEngine(t, func(c *Config) {
-		c.PacketSize = 1000 // avoid any sends; isolate pure queue-conservation behavior
-		c.PartialFlushWallMs = 999_000_000
+		c.PacketSize = 1000
+		// A report window that never closes within this test's virtual time
+		// range means nothing ever becomes eligible to send, isolating pure
+		// queue-conservation (window-accumulation) behavior.
+		c.NormalReportIntervalSimulatedMs = 999_000_000
 		c.ClockMultiplier = 10
 	}, buildRouteCSV(100000))
 

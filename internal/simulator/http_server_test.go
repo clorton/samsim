@@ -105,8 +105,12 @@ func TestHTTP_PostStart(t *testing.T) {
 func TestHTTP_PostStart_AfterCompletedReturns409(t *testing.T) {
 	ts, e, deps := newTestHTTPServer(t)
 	// Large enough packet_size to drain the whole (small) route in one
-	// packet once DRAINING is reached.
-	e.PutConfig(ConfigUpdate{PartialFlushWallMs: int64Ptr(1), PacketSize: intPtr(1000)})
+	// packet once DRAINING is reached; a small report interval so the whole
+	// route's single window closes promptly once generated.
+	e.PutConfig(ConfigUpdate{PacketSize: intPtr(1000)})
+	e.Stop()
+	newInterval := int64(1)
+	e.PutConfig(ConfigUpdate{NormalReportIntervalSimulatedMs: &newInterval})
 	postJSON(t, ts.URL+"/start", "")
 	deps.mono.Advance(10 * time.Second) // more than enough virtual time to exhaust the 1000-row route
 	e.Tick()
@@ -182,7 +186,7 @@ func TestHTTP_ResumeTransmission_RetryConfirmationRequired(t *testing.T) {
 
 func TestHTTP_Reset_PendingDataRequires409(t *testing.T) {
 	ts, e, deps := newTestHTTPServer(t)
-	e.PutConfig(ConfigUpdate{PacketSize: intPtr(1000), PartialFlushWallMs: int64Ptr(999_000_000)})
+	e.PutConfig(ConfigUpdate{PacketSize: intPtr(1000), NormalReportIntervalSimulatedMs: int64Ptr(999_000_000)})
 	postJSON(t, ts.URL+"/start", "")
 	deps.mono.Advance(1 * time.Second)
 	e.Tick()

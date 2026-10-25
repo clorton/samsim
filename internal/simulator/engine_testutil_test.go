@@ -111,8 +111,18 @@ func newTestEngine(t testingT, cfgMutate func(*Config), routeCSV string) (*Engin
 	cfg.RouteID = "demo"
 	cfg.RunStartMs = RunStart{FixedMs: 1_700_000_000_000}
 	cfg.PacketSize = 10
-	cfg.PartialFlushWallMs = 200
-	cfg.MaxPacketsPerSecond = 1000 // fast by default; individual tests override for rate testing
+	// NormalReportIntervalSimulatedMs defaults to 1 simulated second here
+	// (vs. the production default of 10s), so that the small virtual-time
+	// advances used throughout this test suite close report windows
+	// promptly without every test needing its own window-interval override.
+	// Individual tests that specifically exercise window/report-interval
+	// behavior set their own value.
+	cfg.NormalReportIntervalSimulatedMs = 1000
+	// MaxPacketsPerSimulatedSecond is deliberately very high (combined with
+	// a minimum clock_multiplier of 10, actual throughput is never below
+	// 10000/s) so capacity never gates tests that aren't specifically about
+	// rate limiting; those tests override this field themselves.
+	cfg.MaxPacketsPerSimulatedSecond = 1000
 	cfg.LiveWeight = 3
 	cfg.BacklogWeight = 1
 	if cfgMutate != nil {

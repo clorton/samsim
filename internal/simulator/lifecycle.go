@@ -53,6 +53,7 @@ func (e *Engine) Start() error {
 		e.runStartResolved = true
 		e.runID = uuid.NewString()
 		e.generatedCursor = 0
+		e.nextWindowCloseMs = e.cfg.NormalReportIntervalSimulatedMs
 		e.vclock.Start()
 		e.playbackState = PlaybackRunning
 		e.controlRevision++
@@ -119,12 +120,23 @@ func (e *Engine) PauseTransmission() {
 		e.backlogQueue = append(e.backlogQueue, e.liveQueue...)
 		e.liveQueue = nil
 	}
-	// Whether the gate is needed on resume depends on whether backlog ends
-	// up nonempty by the time coverage is restored, not merely on whether
-	// live happened to be nonempty at this exact pause instant (live is
-	// often already flushed to zero by the time an operator calls pause).
-	// ResumeTransmission decides and arms the gate using the state visible
-	// at resume time instead.
+	// Fixes already accumulated in the currently open (not yet closed)
+	// live window also become backlog-bound: once coverage is paused,
+	// those fixes can no longer be delivered as a live report, and per
+	// SIMULATOR_CHANGE_REQUEST.md, "pause continues fix generation into
+	// backlog." They are merged into the open backlog window rather than
+	// a closed queue so they still close/flush on the normal window
+	// boundary, preserving "no empty reports" and window semantics.
+	if len(e.liveWindowAccum) > 0 {
+		e.backlogWindowAccum = append(e.backlogWindowAccum, e.liveWindowAccum...)
+		e.liveWindowAccum = nil
+	}
+	// Whether the fresh-first preference is needed on resume depends on
+	// whether backlog ends up nonempty by the time coverage is restored,
+	// not merely on whether live happened to be nonempty at this exact
+	// pause instant (live is often already flushed to zero by the time an
+	// operator calls pause). ResumeTransmission decides and arms the
+	// preference using the state visible at resume time instead.
 	e.controlRevision++
 }
 
@@ -154,18 +166,20 @@ func (e *Engine) ResumeTransmission(opts ResumeTransmissionOptions) error {
 	// A no-op retry_failed=true with no pending failure is harmless, per
 	// spec; nothing special to do.
 
-	// Arm the recovery gate based on state at resume time (SIM-04: "when
-	// resuming with backlog and future route points remain, wait until at
-	// least one post-outage fix has been generated and send a live packet
-	// first"; "If pause occurred without generating any backlog, no gate is
-	// necessary"). This must be evaluated here rather than at pause time,
-	// since live may have already drained to empty by the moment pause was
-	// called even though backlog went on to accumulate while paused -- the
-	// gate still needs to fire in that case. A repeated resume must not
-	// re-arm an already-armed (or already-cleared) gate.
+	// Arm the one-shot, non-blocking fresh-first preference based on state
+	// at resume time (SIMULATOR_CHANGE_REQUEST.md: "if newer fixes than the
+	// last acknowledged position are available, one immediate live report
+	// may contain the latest reporting window, even if partial... After
+	// that one recovery report, return to normal deadlines"). Unlike the
+	// prior recovery gate, this never blocks backlog sends; it only
+	// expresses a preference consumed by selectOrdinaryLocked's first
+	// opportunity to send live. If pause occurred without generating any
+	// backlog, no preference is necessary. A repeated resume must not
+	// re-arm an already-armed (or already-consumed) preference.
 	if e.coveragePaused {
-		if len(e.backlogQueue) > 0 && e.generatedCursor < len(e.route) {
-			e.recoveryWaitingForLive = true
+		hasBacklog := len(e.backlogQueue) > 0 || len(e.backlogWindowAccum) > 0
+		if hasBacklog && e.generatedCursor < len(e.route) {
+			e.freshFirstPending = true
 		}
 		e.coveragePaused = false
 	}
@@ -226,6 +240,9 @@ func (e *Engine) Reset(discardPending bool) (ResetResult, error) {
 	e.generatedCursor = 0
 	e.liveQueue = nil
 	e.backlogQueue = nil
+	e.liveWindowAccum = nil
+	e.backlogWindowAccum = nil
+	e.nextWindowCloseMs = 0
 	e.pending = nil
 	e.generatedFixes = 0
 	e.acknowledgedFixesCount = 0
@@ -237,9 +254,10 @@ func (e *Engine) Reset(discardPending bool) (ResetResult, error) {
 	e.latestAcknowledgedTimestampMs = 0
 	e.generatedSamples = nil
 	e.acknowledgedSamples = nil
+	e.attemptedSamples = nil
 	e.lastError = nil
 	e.coveragePaused = false
-	e.recoveryWaitingForLive = false
+	e.freshFirstPending = false
 	e.runStartResolved = false
 	e.resolvedRunStartMs = 0
 	e.haveLastAttempt = false

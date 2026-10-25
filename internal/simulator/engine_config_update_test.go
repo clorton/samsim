@@ -112,6 +112,50 @@ func TestEngine_PutConfig_RouteIDChangeValidatesBeforeApplying(t *testing.T) {
 	}
 }
 
+// TestEngine_PutConfig_ReportIntervalRequiresStopped implements
+// SIMULATOR_CHANGE_REQUEST.md: "interval changes require stopped
+// playback, seal the current partial window once, and anchor the new
+// schedule at current virtual time."
+func TestEngine_PutConfig_ReportIntervalRequiresStopped(t *testing.T) {
+	e, deps := newTestEngine(t, func(c *Config) {
+		c.ClockMultiplier = 10
+		c.NormalReportIntervalSimulatedMs = 999_000_000 // never closes naturally in this test
+	}, buildRouteCSV(1000))
+	e.Start()
+
+	newInterval := int64(5000)
+	if err := e.PutConfig(ConfigUpdate{NormalReportIntervalSimulatedMs: &newInterval}); err != ErrFieldRequiresStopped {
+		t.Fatalf("expected ErrFieldRequiresStopped while RUNNING, got %v", err)
+	}
+
+	// Generate some live records that accumulate in the (never-closing)
+	// open window, then stop and change the interval: the open window must
+	// be sealed (moved into the ready queue) exactly once as part of the
+	// change, not discarded.
+	deps.mono.Advance(300 * time.Millisecond) // *10 -> 3 virtual seconds
+	e.Tick()
+	pending := e.Status().LiveWindowPendingCount
+	if pending == 0 {
+		t.Fatal("expected some live records accumulated in the open window before stop")
+	}
+
+	e.Stop()
+	if err := e.PutConfig(ConfigUpdate{NormalReportIntervalSimulatedMs: &newInterval}); err != nil {
+		t.Fatalf("expected report interval change to succeed while STOPPED, got %v", err)
+	}
+
+	st := e.Status()
+	if st.Config.NormalReportIntervalSimulatedMs != newInterval {
+		t.Fatalf("expected interval applied, got %d", st.Config.NormalReportIntervalSimulatedMs)
+	}
+	if st.LiveWindowPendingCount != 0 {
+		t.Fatalf("expected the open window to be sealed (moved to the ready queue) by the interval change, got %d still pending", st.LiveWindowPendingCount)
+	}
+	if st.LiveQueueCount != pending {
+		t.Fatalf("expected the sealed window's %d records to land in the live queue, got %d", pending, st.LiveQueueCount)
+	}
+}
+
 // TestEngine_PutConfig_StartupOnlyFieldsRejected implements: listen,
 // simulator_id, identity_db_path, route map and resource limits are
 // startup-only; there is no ConfigUpdate field for them at all, so this

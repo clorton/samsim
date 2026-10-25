@@ -9,21 +9,22 @@ const (
 )
 
 // LaneEligibility describes whether each lane currently qualifies for an
-// ordinary (non-recovery-gated) send attempt, per SIM-04: "A lane is
-// eligible when it has packet_size records, its oldest queued record has
-// waited partial_flush_wall_ms in wall time, or EOF/recovery requires
-// flushing."
+// ordinary send attempt. Per SIMULATOR_CHANGE_REQUEST.md, a lane is
+// eligible whenever its ready queue is nonempty: records only ever reach
+// the ready queue once their report window has closed, so there is no
+// separate size/age gate here (see isLaneEligibleLocked).
 type LaneEligibility struct {
 	LiveEligible    bool
 	BacklogEligible bool
 }
 
-// FairnessSelector implements SIM-04's weighted live/backlog packet
-// selection: a repeating pattern of LiveWeight live slots followed by
-// BacklogWeight backlog slots (default 3 live, 1 backlog, i.e. L,L,L,B),
-// advanced only on actual ordinary send attempts (never on empty timer
-// ticks), with spare slots given to whichever lane is eligible when the
-// pattern's preferred lane is not.
+// FairnessSelector implements the weighted live/backlog packet selection
+// described in SIM-04 and preserved by SIMULATOR_CHANGE_REQUEST.md: a
+// repeating pattern of LiveWeight live slots followed by BacklogWeight
+// backlog slots (default 3 live, 1 backlog, i.e. L,L,L,B), advanced only on
+// actual ordinary send attempts (never on empty timer ticks), with spare
+// slots given to whichever lane is eligible when the pattern's preferred
+// lane is not.
 //
 // This type holds no I/O or queue data; it is a pure decision function over
 // a cycle position, making it easy to test in isolation from the rest of

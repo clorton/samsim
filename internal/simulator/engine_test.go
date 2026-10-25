@@ -49,7 +49,10 @@ func TestEngine_StartIdempotentWhileRunning(t *testing.T) {
 }
 
 func TestEngine_StartAfterCompletedRequiresReset(t *testing.T) {
-	e, deps := newTestEngine(t, func(c *Config) { c.PartialFlushWallMs = 1 }, buildRouteCSV(1))
+	// EOF force-closes the open report window regardless of interval, so no
+	// special report-interval override is needed for the single row to
+	// become sendable once DRAINING is reached.
+	e, deps := newTestEngine(t, nil, buildRouteCSV(1))
 	e.Start()
 	deps.mono.Advance(1 * time.Second) // let the single row become due -> DRAINING
 	e.Tick()
@@ -98,13 +101,13 @@ func TestEngine_ResetRequiresStopped(t *testing.T) {
 
 func TestEngine_ResetPendingDataRequiresDiscard(t *testing.T) {
 	// Generate a few rows (route has more remaining, so playback stays
-	// RUNNING, not DRAINING) but never let them become eligible for sending
-	// (packet_size not reached, partial_flush age not elapsed), so they
-	// remain genuinely unsent in the live queue.
+	// RUNNING, not DRAINING) but never let their report window close (so
+	// they never become eligible for sending), so they remain genuinely
+	// unsent, accumulating in the open live window.
 	e, deps := newTestEngine(t, func(c *Config) {
 		c.ClockMultiplier = 10
 		c.PacketSize = 100
-		c.PartialFlushWallMs = 999_000
+		c.NormalReportIntervalSimulatedMs = 999_000_000
 	}, buildRouteCSV(1000))
 	e.Start()
 	deps.mono.Advance(500 * time.Millisecond) // multiplier 10 -> 5 virtual seconds -> 5 rows due; 995 remain
@@ -130,7 +133,8 @@ func TestEngine_ResetPendingDataRequiresDiscard(t *testing.T) {
 }
 
 func TestEngine_ResetClearsCountersButKeepsConfig(t *testing.T) {
-	e, deps := newTestEngine(t, func(c *Config) { c.PartialFlushWallMs = 1 }, buildRouteCSV(5))
+	// EOF force-closes the open report window regardless of interval.
+	e, deps := newTestEngine(t, nil, buildRouteCSV(5))
 	e.Start()
 	deps.mono.Advance(10 * time.Second) // let all 5 rows become due -> DRAINING
 	e.Tick()

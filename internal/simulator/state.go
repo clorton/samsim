@@ -152,13 +152,36 @@ type Engine struct {
 	runStartResolved   bool
 	generatedCursor    int
 
+	// liveQueue/backlogQueue hold fixes whose normal report window has
+	// already closed: they are ready to be bundled into packets and sent,
+	// per SIMULATOR_CHANGE_REQUEST.md. liveWindowAccum/backlogWindowAccum
+	// hold fixes generated in the currently open window, not yet ready to
+	// send; they move into the corresponding ready queue only when the
+	// window closes (advanceReportWindowsLocked), never merely because
+	// transmission capacity is available.
 	liveQueue    []queuedRecord
 	backlogQueue []queuedRecord
 
+	liveWindowAccum    []queuedRecord
+	backlogWindowAccum []queuedRecord
+	// nextWindowCloseMs is the virtual-elapsed ms at which the currently
+	// open report window closes (becomes ready to send). It advances by
+	// cfg.NormalReportIntervalSimulatedMs each time a window closes, and is
+	// re-anchored at the current virtual time when the interval changes at
+	// runtime (always while stopped; see PutConfig).
+	nextWindowCloseMs int64
+
 	pending *pendingPacketState
 
-	fairness               *FairnessSelector
-	recoveryWaitingForLive bool
+	fairness *FairnessSelector
+	// freshFirstPending is a one-shot, non-blocking preference (not a gate):
+	// armed on ResumeTransmission when backlog is pending, it causes the
+	// next ready live records to be force-flushed as an immediate (possibly
+	// partial) live report ahead of the normal window boundary, so recovery
+	// surfaces the freshest position as soon as possible. It never blocks
+	// backlog sends (SIMULATOR_CHANGE_REQUEST.md: "Remove any gate that
+	// blocks backlog waiting for a future live fix").
+	freshFirstPending bool
 
 	lastAttemptMonoTime time.Time
 	haveLastAttempt     bool
@@ -174,6 +197,10 @@ type Engine struct {
 
 	generatedSamples    []rateSample
 	acknowledgedSamples []rateSample
+	// attemptedSamples tracks packetsAttempted over the rolling window, used
+	// to report observed_packets_per_second (actual outbound attempt rate)
+	// alongside the configured target rate (SIMULATOR_CHANGE_REQUEST.md).
+	attemptedSamples []rateSample
 
 	lastError *LastErrorInfo
 
@@ -343,9 +370,15 @@ func (e *Engine) Tick() {
 
 // generateDueLocked generates up to maxGenerationChunk route records whose
 // event timestamp is now due given the virtual clock's current elapsed
-// time, appending each to the live queue (or backlog, if coverage is
-// currently paused) and tracking generation counters/watermarks. Caller
-// must hold e.mu.
+// time, accumulating each into the currently open report window's live or
+// backlog accumulator (depending on whether coverage is currently paused),
+// closing any report window(s) whose simulated-time boundary a record's
+// event time has reached or passed, and tracking generation counters/
+// watermarks. Per SIMULATOR_CHANGE_REQUEST.md, report windows are a pure
+// function of simulated (event) time: a window closes -- and its
+// accumulated fixes become eligible to send -- strictly because virtual
+// time has advanced past its boundary, never because transmission capacity
+// happens to be available. Caller must hold e.mu.
 func (e *Engine) generateDueLocked() {
 	if e.playbackState != PlaybackRunning {
 		return
@@ -360,15 +393,27 @@ func (e *Engine) generateDueLocked() {
 		end++
 	}
 	if end == e.generatedCursor {
+		// No new records this tick, but simulated time may still have
+		// crossed a window boundary with nothing to generate in it (a gap
+		// in source timing, or simply waiting between sparse rows).
+		e.closeDueReportWindowsLocked(virtualNowMs)
 		return
 	}
 
 	for i := e.generatedCursor; i < end; i++ {
+		elapsedMs := e.route[i].TimestampMs - e.resolvedRunStartMs
+		// Close any window(s) this record's event time has reached/passed
+		// BEFORE accumulating it, so it lands in the correct (possibly new)
+		// current window, and so a record landing exactly on a boundary is
+		// correctly placed in the window that STARTS there (half-open
+		// [start,end)), not the one that just closed.
+		e.closeDueReportWindowsLocked(elapsedMs)
+
 		rec := queuedRecord{routeIndex: i, enqueuedAt: nowMono}
 		if e.coveragePaused {
-			e.backlogQueue = append(e.backlogQueue, rec)
+			e.backlogWindowAccum = append(e.backlogWindowAccum, rec)
 		} else {
-			e.liveQueue = append(e.liveQueue, rec)
+			e.liveWindowAccum = append(e.liveWindowAccum, rec)
 		}
 		e.generatedFixes++
 		if e.route[i].TimestampMs > e.latestGeneratedTimestampMs {
@@ -380,6 +425,50 @@ func (e *Engine) generateDueLocked() {
 
 	if e.generatedCursor >= len(e.route) {
 		e.playbackState = PlaybackDraining
+		// EOF flushes remaining fixes: seal whatever window is still open
+		// immediately, regardless of whether its boundary has been reached,
+		// so the last partial window is not stranded forever (SIM-02/04,
+		// SIMULATOR_CHANGE_REQUEST.md: "EOF flushes remaining fixes and
+		// continues draining").
+		e.forceCloseOpenWindowLocked()
+		return
+	}
+
+	// Close any window(s) whose boundary virtual time has now passed even
+	// though the last generated record didn't land exactly on/past it
+	// (e.g. the chunk ended mid-window because maxGenerationChunk was hit,
+	// or the next due record's timestamp is still in the future).
+	e.closeDueReportWindowsLocked(virtualNowMs)
+}
+
+// closeDueReportWindowsLocked closes every report window whose boundary is
+// <= elapsedMs (there may be more than one, e.g. after a large catch-up
+// chunk or a sparse CSV gap spanning multiple windows), moving each
+// window's accumulated live/backlog fixes into the corresponding ready
+// queue. A window with nothing accumulated produces no report ("no empty
+// reports"). Caller must hold e.mu.
+func (e *Engine) closeDueReportWindowsLocked(elapsedMs int64) {
+	for elapsedMs >= e.nextWindowCloseMs {
+		e.forceCloseOpenWindowLocked()
+		e.nextWindowCloseMs += e.cfg.NormalReportIntervalSimulatedMs
+	}
+}
+
+// forceCloseOpenWindowLocked moves whatever is currently accumulated for
+// the open report window (live and/or backlog) into the corresponding
+// ready-to-send queue, without touching nextWindowCloseMs. Used both by
+// ordinary boundary-driven closes (closeDueReportWindowsLocked, which
+// advances nextWindowCloseMs itself afterward) and by EOF/runtime-interval-
+// change sealing, which reposition nextWindowCloseMs separately. Caller
+// must hold e.mu.
+func (e *Engine) forceCloseOpenWindowLocked() {
+	if len(e.liveWindowAccum) > 0 {
+		e.liveQueue = append(e.liveQueue, e.liveWindowAccum...)
+		e.liveWindowAccum = nil
+	}
+	if len(e.backlogWindowAccum) > 0 {
+		e.backlogQueue = append(e.backlogQueue, e.backlogWindowAccum...)
+		e.backlogWindowAccum = nil
 	}
 }
 
@@ -394,10 +483,12 @@ func (e *Engine) checkCompletionLocked() {
 	}
 }
 
-// totalUnsentLocked is live+backlog+pending record counts. Caller must
-// hold e.mu.
+// totalUnsentLocked is live+backlog+pending record counts, including fixes
+// still accumulating in an not-yet-closed report window (they are
+// generated and must never be reported lost, even though they are not yet
+// eligible to send). Caller must hold e.mu.
 func (e *Engine) totalUnsentLocked() int {
-	n := len(e.liveQueue) + len(e.backlogQueue)
+	n := len(e.liveQueue) + len(e.backlogQueue) + len(e.liveWindowAccum) + len(e.backlogWindowAccum)
 	if e.pending != nil {
 		n += len(e.pending.recordIndices)
 	}
@@ -405,27 +496,27 @@ func (e *Engine) totalUnsentLocked() int {
 }
 
 // isLaneEligibleLocked reports whether queue currently qualifies for an
-// ordinary send attempt (SIM-04): it has packet_size records, its oldest
-// record has waited partial_flush_wall_ms, or EOF/draining requires
-// flushing regardless of size/age. Caller must hold e.mu.
+// ordinary send attempt, per SIMULATOR_CHANGE_REQUEST.md: it is eligible
+// whenever it holds any fixes at all, since by construction a record only
+// ever reaches liveQueue/backlogQueue once its report window has already
+// closed (closeDueReportWindowsLocked/forceCloseOpenWindowLocked) -- there
+// is no additional size or wall-clock-age gate here. packet_size still
+// bounds how many records a single attempt draws from the queue (a safety
+// bound on wire size, applied in prepareSendAttemptLocked), not whether the
+// queue is eligible at all. Caller must hold e.mu.
 func (e *Engine) isLaneEligibleLocked(queue []queuedRecord) bool {
-	if len(queue) == 0 {
-		return false
-	}
-	if e.playbackState == PlaybackDraining {
-		return true
-	}
-	if len(queue) >= e.cfg.PacketSize {
-		return true
-	}
-	age := e.mono.Now().Sub(queue[0].enqueuedAt)
-	return age >= time.Duration(e.cfg.PartialFlushWallMs)*time.Millisecond
+	return len(queue) > 0
 }
 
 // rateIntervalLocked returns the minimum wall-clock spacing between send
-// attempts (SIM-05). Caller must hold e.mu.
+// attempts (SIM-05), scaled by the clock multiplier: configured capacity is
+// a simulated-time rate (max_packets_per_simulated_second), so the actual
+// enforced wall-clock rate is that rate multiplied by ClockMultiplier (per
+// SIMULATOR_CHANGE_REQUEST.md: "actual packet-rate ceiling = configured
+// rate x M"). Caller must hold e.mu.
 func (e *Engine) rateIntervalLocked() time.Duration {
-	return time.Duration(float64(time.Second) / e.cfg.MaxPacketsPerSecond)
+	actualRate := e.cfg.MaxPacketsPerSimulatedSecond * e.vclock.Multiplier()
+	return time.Duration(float64(time.Second) / actualRate)
 }
 
 // recordGeneratedSampleLocked and recordAcknowledgedSampleLocked append a

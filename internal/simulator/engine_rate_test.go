@@ -5,15 +5,21 @@ import (
 	"time"
 )
 
+// smallReportInterval closes a report window after essentially every
+// generated row, so these rate-limiting tests observe the same per-fix
+// eligibility timing as before the windowed-reporting change, decoupling
+// rate-limit observations from report-window cadence.
+const smallReportIntervalMs = int64(1)
+
 // TestEngine_RateLimitSpacing implements S11: attempts respect wall-clock
-// spacing of at least 1/max_packets_per_second, with no burst credit
-// accumulation after idle/outage.
+// spacing of at least 1/(max_packets_per_simulated_second*clock_multiplier),
+// with no burst credit accumulation after idle/outage.
 func TestEngine_RateLimitSpacing(t *testing.T) {
 	e, deps := newTestEngine(t, func(c *Config) {
 		c.ClockMultiplier = 1000
 		c.PacketSize = 1
-		c.PartialFlushWallMs = 10
-		c.MaxPacketsPerSecond = 10 // 100ms spacing
+		c.NormalReportIntervalSimulatedMs = smallReportIntervalMs
+		c.MaxPacketsPerSimulatedSecond = 0.01 // *1000 multiplier -> 10/s actual -> 100ms spacing
 	}, buildRouteCSV(100000))
 
 	e.Start()
@@ -51,8 +57,8 @@ func TestEngine_RateLimitNoBurstAfterIdle(t *testing.T) {
 	e, deps := newTestEngine(t, func(c *Config) {
 		c.ClockMultiplier = 1000
 		c.PacketSize = 1
-		c.PartialFlushWallMs = 10
-		c.MaxPacketsPerSecond = 10 // 100ms spacing
+		c.NormalReportIntervalSimulatedMs = smallReportIntervalMs
+		c.MaxPacketsPerSimulatedSecond = 0.01 // *1000 multiplier -> 10/s actual -> 100ms spacing
 	}, buildRouteCSV(100000))
 
 	e.Start()
@@ -87,8 +93,8 @@ func TestEngine_RateLimitRuntimeChangeUsesLastAttemptAnchor(t *testing.T) {
 	e, deps := newTestEngine(t, func(c *Config) {
 		c.ClockMultiplier = 1000
 		c.PacketSize = 1
-		c.PartialFlushWallMs = 10
-		c.MaxPacketsPerSecond = 10 // 100ms spacing
+		c.NormalReportIntervalSimulatedMs = smallReportIntervalMs
+		c.MaxPacketsPerSimulatedSecond = 0.01 // *1000 multiplier -> 10/s actual -> 100ms spacing
 	}, buildRouteCSV(100000))
 
 	e.Start()
@@ -97,9 +103,10 @@ func TestEngine_RateLimitRuntimeChangeUsesLastAttemptAnchor(t *testing.T) {
 	e.Tick()
 	waitForSendAndSettle(t, e, deps, 1)
 
-	// Speed up the rate at runtime.
-	newRate := 100.0 // 10ms spacing
-	if err := e.PutConfig(ConfigUpdate{MaxPacketsPerSecond: &newRate}); err != nil {
+	// Speed up the rate at runtime: this is a hot field, applicable while
+	// running.
+	newRate := 0.1 // *1000 multiplier -> 100/s actual -> 10ms spacing
+	if err := e.PutConfig(ConfigUpdate{MaxPacketsPerSimulatedSecond: &newRate}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -121,8 +128,8 @@ func TestEngine_SingleInFlightLimitsThroughput(t *testing.T) {
 	e, deps := newTestEngine(t, func(c *Config) {
 		c.ClockMultiplier = 1000
 		c.PacketSize = 1
-		c.PartialFlushWallMs = 10
-		c.MaxPacketsPerSecond = 10000 // effectively unlimited for this test
+		c.NormalReportIntervalSimulatedMs = smallReportIntervalMs
+		c.MaxPacketsPerSimulatedSecond = 10 // *1000 multiplier -> 10000/s actual: effectively unlimited for this test
 	}, buildRouteCSV(100000))
 
 	block := make(chan struct{})
