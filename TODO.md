@@ -27,7 +27,7 @@ This is an ambitious roughly 18.5-hour budget. Reduce dashboard polish first; pr
 - [x] **AG-07** [Query APIs](AGGREGATOR_SPEC.md#ag-07): vehicles, coherent snapshots, trips, geometry, raw fixes with assignment reasons, completeness, pagination, health, consistent errors.
 - [x] **AG-08** [Events and revisions](AGGREGATOR_SPEC.md#ag-08): persistent vehicle revision, one event envelope per changed vehicle transaction, post-commit ordered WebSocket delivery, subscribe-ready handshake, gap/reconnect resnapshot.
 - [x] **AG-09** [Simulator control proxy](AGGREGATOR_SPEC.md#ag-09): static simulator registry, fixed allowed routes, request deadlines and useful upstream errors. Configure a stub before simulator exists.
-- [x] **AG-10** [Verification and operations](AGGREGATOR_SPEC.md#ag-10): table/property/integration/race tests, restart and concurrency tests, reproducible fixtures, CLI/config documentation. **G3:** standalone aggregator passes its contract using fixture requests; `go test ./...` and `go test -race ./...` pass. Includes precommit crash-injection tests (ingestion and closure, T14) and a throughput smoke test reporting actual latency/throughput (skipped under `-short`); see README "Development and validation".
+- [x] **AG-10** [Verification and operations](AGGREGATOR_SPEC.md#ag-10): table/property/integration/race tests, restart and concurrency tests, reproducible fixtures, CLI/config documentation. **G3:** standalone aggregator passes its contract using fixture requests; `go test ./...` and `go test -race ./...` pass. Includes precommit crash-injection tests (ingestion and closure, T14) and a throughput smoke test reporting actual latency/throughput (skipped under `-short`); see README "Development" > "Testing and validation".
 
 Dependencies: AG-01 → AG-02/03 → AG-04 → AG-05 → AG-06; AG-07/08 depend on those state semantics; AG-09 can use a stub. AG-10 accompanies each task, then gates completion.
 
@@ -54,12 +54,12 @@ Dependencies: AG-01 → AG-02/03 → AG-04 → AG-05 → AG-06; AG-07/08 depend 
 
 ## 4. Dashboard — minimal foundation (P0; UX details deferred)
 
-- [ ] **DASH-01** Scaffold React/TypeScript/Vite and MapLibre; vehicle selection, trip fetching/selection, pan/zoom map, latest position and trip geometry.
-- [ ] **DASH-02** Keep available trips, visible trip IDs, selected trip ID, and follow-live state separate. Decide the list/visibility interaction later; do not assume all listed trips must be rendered.
-- [ ] **DASH-03** Use AG-08 subscribe-first snapshots and revision resync. On merges, refresh current trips and resolve selected predecessor through lineage.
-- [ ] **DASH-04** Add basic simulator controls through AG-09 and manual closure through AG-06. Show missing internal fixes and boundary uncertainty; allow explicit override only after warning. Handle stale revisions by refreshing.
-- [ ] **DASH-05** **G6:** vehicle selection, geometry, live updates, outage/resume, merge reconciliation, and closure warning work. Defer detailed layouts, trip visibility UX, and elaborate controls.
-- [ ] **DASH-06 — P1** Merge highlight, diagnostic event log, detailed congestion visualization.
+- [x] **DASH-01** Scaffold React/TypeScript/Vite and MapLibre; vehicle selection, trip fetching/selection, pan/zoom map, latest position and trip geometry.
+- [x] **DASH-02** Keep available trips, visible trip IDs, selected trip ID, and follow-live state separate. Decide the list/visibility interaction later; do not assume all listed trips must be rendered.
+- [x] **DASH-03** Use AG-08 subscribe-first snapshots and revision resync. On merges, refresh current trips and resolve selected predecessor through lineage. See `dashboard/src/useVehicle.ts` (ready/snapshot handshake, revision-gap/database-change reconnect) and `dashboard/README.md` ("Merge events move selected predecessor IDs to their successor").
+- [x] **DASH-04** Add basic simulator controls through AG-09 and manual closure through AG-06. Show missing internal fixes and boundary uncertainty; allow explicit override only after warning. Handle stale revisions by refreshing. See `dashboard/src/components/SimulatorControls.tsx`.
+- [x] **DASH-05** **G6:** vehicle selection, geometry, live updates, outage/resume, merge reconciliation, and closure warning work. Defer detailed layouts, trip visibility UX, and elaborate controls.
+- [x] **DASH-06 — P1** Merge highlight, diagnostic event log, detailed congestion visualization. See `dashboard/src/components/EventLog.tsx` (History panel) and `dashboard/README.md`'s "Consistency and limits" (merge selection-following, tested per "chained merge selection" in the frontend test suite).
 
 ## Final integration (P0)
 
@@ -67,4 +67,4 @@ Dependencies: AG-01 → AG-02/03 → AG-04 → AG-05 → AG-06; AG-07/08 depend 
 - [ ] **E2E-02** Observe an internal gap → close rejected with warning → explicitly force close → send delayed internal fix and future fix within 600 seconds. Verify quarantine, frozen closed geometry, new future trip, and no crossing merge (AG-06).
 - [ ] **E2E-03** Repeat identical packet across encodings, retry after lost response, submit conflicting packet/fix, and restart aggregator. Confirm no double effects or state loss (AG-03/04/10).
 - [ ] **E2E-04** Disconnect WebSocket during ingestion; reconnect and recover via snapshot. Verify latest position never regresses during backlog delivery (AG-05/08).
-- [ ] **E2E-05** Write README architecture/run instructions and a short demo script with deterministic route/config fixtures. Record known limitations and successful checks. **G7:** demo runs from a clean checkout/database and survives aggregator restart.
+- [ ] **E2E-05** Write README architecture/run instructions and a short demo script with deterministic route/config fixtures. Record known limitations and successful checks. **G7:** demo runs from a clean checkout/database and survives aggregator restart. README now has full "Development" build/run/test instructions for the whole stack (tools, clone-and-build, run-the-whole-stack, testing); a dedicated scripted demo with fixed fixtures and a clean-checkout/restart check is still open.

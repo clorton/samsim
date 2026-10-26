@@ -1,21 +1,21 @@
 # GPS Telemetry Demo
 
-**Dashboard implemented:** see [dashboard/README.md](dashboard/README.md) for local startup, CSV uploads, simulator controls, live map, history and the database explorer. Start the aggregator with `config.dashboard.example.yaml` to enable its simulator registry.
-
 A weekend project demonstrating GPS telemetry ingestion, event-time trip reconstruction, and live vehicle visualization. The central scenario is a communications outage: current telemetry resumes first, then delayed fixes fill in history and merge provisional trips.
 
-The backend uses Go and SQLite. The planned dashboard uses React, TypeScript, Vite, and MapLibre GL JS.
+**New here? See the [Development](#development) section below** for every tool required and the exact commands to build and run the whole stack (aggregator, simulator, inspector, dashboard) from a clean checkout.
+
+The backend uses Go and SQLite. The dashboard uses React, TypeScript, Vite, and MapLibre GL JS.
 
 ## Project status
 
-**The aggregator (AG-01 through AG-10), the GPS simulator (SIM-01 through SIM-07), and the inspector CLI `gpsinspect` (INS-01 through INS-06) are implemented and runnable**, including a real, automated end-to-end integration test (the simulator driving a real aggregator through a >600-second outage, producing two trips that later merge with correct lineage) and a second real end-to-end test exercising `gpsinspect` itself against a real aggregator through that same outage/merge scenario plus a forced close and a saved immutability baseline. The dashboard is not yet implemented.
+**The aggregator (AG-01 through AG-10), the GPS simulator (SIM-01 through SIM-07), the inspector CLI `gpsinspect` (INS-01 through INS-06), and the dashboard (DASH-01 through DASH-06) are all implemented and runnable**, including a real, automated end-to-end integration test (the simulator driving a real aggregator through a >600-second outage, producing two trips that later merge with correct lineage) and a second real end-to-end test exercising `gpsinspect` itself against a real aggregator through that same outage/merge scenario plus a forced close and a saved immutability baseline. See [dashboard/README.md](dashboard/README.md) for the dashboard's own local-startup guide, CSV uploads, simulator controls, live map, history, and database explorer.
 
 Implementation order:
 
 1. **Aggregator — done** (see "Running the aggregator" below)
 2. **GPS simulator — done** (see "Running the simulator" below)
 3. **Inspector CLI — done** (see "Using the inspector" below)
-4. Minimal dashboard — not started
+4. **Dashboard — done** (see "Development" below and [dashboard/README.md](dashboard/README.md))
 
 Track work in [TODO.md](TODO.md). The normative contracts are [specs/AGGREGATOR_SPEC.md](specs/AGGREGATOR_SPEC.md), [specs/SIMULATOR_SPEC.md](specs/SIMULATOR_SPEC.md), and [specs/INSPECTOR_SPEC.md](specs/INSPECTOR_SPEC.md); their `AG-*`/`SIM-*`/`INS-*` IDs match the checklist. If this README and a detailed spec differ, follow the spec and update this README.
 
@@ -92,7 +92,7 @@ Useful additional tools:
 | `curl` | Submit telemetry and inspect REST APIs |
 | `sqlite3` | Inspect database contents during development |
 | `jq` | Optional JSON formatting/filtering |
-| Node.js LTS and npm | Build the dashboard (not yet implemented) |
+| Node.js 22.12+ and `pnpm` | Build/run the dashboard (see [Development](#development) below) |
 
 ```bash
 brew install sqlite jq
@@ -106,16 +106,20 @@ brew install sqlite jq
 samsim/
 ├── README.md
 ├── TODO.md
-├── aggregator.md             # curl/wget/browser endpoint reference
-├── inspector.md              # aggregator + simulator + gpsinspect walkthrough
+├── aggregator.md              # curl/wget/browser endpoint reference
+├── simulator.md               # curl/wget/browser endpoint reference for the simulator's control API
+├── simulator-verification.md  # worked outage/bandwidth scenarios with expected numeric results
+├── inspector.md               # aggregator + simulator + gpsinspect walkthrough
 ├── specs/
 │   ├── AGGREGATOR_SPEC.md
 │   ├── SIMULATOR_SPEC.md
+│   ├── SIMULATOR_CHANGE_REQUEST.md  # supersedes parts of SIMULATOR_SPEC.md; see "Running the simulator"
 │   └── INSPECTOR_SPEC.md
 ├── go.mod
 ├── go.sum
-├── config.example.yaml       # aggregator config
-├── simulator.example.json    # simulator config
+├── config.example.yaml           # aggregator config
+├── config.dashboard.example.yaml # aggregator config with the dashboard's simulator registered
+├── simulator.example.json        # simulator config
 ├── cmd/
 │   ├── aggregator/            # main.go wires config/storage/service/HTTP
 │   ├── simulator/             # main.go wires config/identity store/engine/HTTP
@@ -149,7 +153,7 @@ samsim/
 │   ├── cannonball.csv, bendtobothell.csv, crosscountry.csv, tennessee.csv  # real route fixtures
 │   ├── simulator/
 │   └── inspector/
-└── dashboard/                 # not yet implemented
+└── dashboard/                 # React/TypeScript/Vite/MapLibre dashboard (see dashboard/README.md)
 ```
 
 Module path is `gpsdemo`, matching the proto's `go_package = "gpsdemo/gen/telemetry/v1;telemetryv1"`.
@@ -381,15 +385,83 @@ gpsinspect validate vehicle-001 --baseline before.json
 
 Exit codes: `0` success (or validate with no FAIL), `1` API/network/protocol/IO failure, `2` usage error, `3` validate found a FAIL, `4` close canceled/confirmation required, `5` a consistent revision could not be collected (or a close's revision went stale), `130` SIGINT.
 
-## Development and validation
+## Development
+
+Everything needed to build and run the whole stack (aggregator, simulator, inspector CLI, dashboard) from a clean checkout.
+
+### Required tools
+
+| Tool | Version | Needed for |
+|---|---|---|
+| Go | 1.23+ (developed/tested on 1.26) | Aggregator, simulator, `gpsinspect` — everything backend |
+| Node.js | 22.12+ (24 also works) | Dashboard |
+| `pnpm` | any recent version (`corepack enable` or `npm install -g pnpm`) | Dashboard package management/scripts |
+
+Optional, only needed for specific tasks:
+
+| Tool | Needed for |
+|---|---|
+| `protoc` + `protoc-gen-go` | Regenerating `gen/telemetry/v1/telemetry.pb.go` after editing `proto/telemetry/v1/telemetry.proto` (the generated file is already checked in; a normal build/test/run never needs these) |
+| `curl` / `wget` | Exercising the HTTP APIs by hand (see [aggregator.md](aggregator.md), [simulator.md](simulator.md)) |
+| `sqlite3` | Inspecting database contents directly during development |
+| `jq` | Formatting/filtering JSON output |
+
+See ["Local prerequisites"](#local-prerequisites) above for exact install commands (`brew install protobuf`, `go install protoc-gen-go`, `brew install sqlite jq`) and the Go dependency list. No database server, Docker, or cloud account is required anywhere in this project; SQLite is embedded and the dashboard's dev server proxies directly to a local aggregator.
+
+### Clone and build
+
+```bash
+git clone <repo-url> samsim && cd samsim
+
+# Build every backend binary (there is nothing else to install first).
+go build -o bin/aggregator ./cmd/aggregator
+go build -o bin/simulator ./cmd/simulator
+go build -o bin/gpsinspect ./cmd/gpsinspect
+
+# Install and build the dashboard.
+cd dashboard
+pnpm install
+pnpm build   # tsc --noEmit && vite build -- also exercises the TypeScript compiler
+cd ..
+```
+
+`go build ./...` from the repository root also works and compiles every package (including tests' dependencies), but the three `-o bin/...` commands above are what you actually run.
+
+### Run the whole stack locally
+
+Three processes, each in its own terminal, all from the repository root:
+
+```bash
+# Terminal 1: aggregator. Use config.dashboard.example.yaml (not the bare
+# default) so its simulator control-proxy registry is populated -- the
+# dashboard's simulator controls return 404 without it.
+go run ./cmd/aggregator -config config.dashboard.example.yaml
+
+# Terminal 2: simulator (starts READY; start playback from the dashboard,
+# curl, or gpsinspect -- see below).
+go run ./cmd/simulator -config simulator.example.json
+
+# Terminal 3: dashboard dev server.
+cd dashboard
+pnpm dev
+```
+
+Open **http://127.0.0.1:5173/**. The dashboard proxies `/api` and WebSocket traffic to `http://127.0.0.1:8080` in dev mode, so there's no CORS configuration to do. See [dashboard/README.md](dashboard/README.md) for the full workflow (CSV route uploads, simulator controls, trip selection, manual closure, the database/history panels) and [inspector.md](inspector.md) for an equivalent walkthrough driven entirely from `gpsinspect`/`curl` instead of the browser.
+
+To drive the backend without the dashboard at all (e.g. over SSH, or to script a scenario), use the built binaries plus `gpsinspect`/`curl` directly -- see "Running the aggregator", "Running the simulator", and "Using the inspector" above, and [simulator-verification.md](simulator-verification.md) for worked outage/bandwidth scenarios with expected numeric results.
+
+### Testing and validation
+
+Backend (from the repository root):
 
 ```bash
 go build ./...
+go vet ./...
 go test ./...
 go test -race ./...
 ```
 
-As of this writing, both commands pass cleanly across all implemented packages (343 tests). Test coverage by spec section:
+As of this writing, these pass cleanly across all implemented packages (343+ tests). Test coverage by spec section:
 
 | Package | Covers |
 |---|---|
@@ -404,6 +476,16 @@ As of this writing, both commands pass cleanly across all implemented packages (
 | `cmd/gpsinspect` | INS-01..04/06: flag precedence and validation, human/JSON output contract, pagination/cursor-cycle detection, the at-revision coherent-read protocol, trip lineage display, and the full close workflow (I01-I08), plus a real end-to-end test (I16) |
 | `internal/inspectwatch` | INS-04: AG-08 ready/snapshot handshake, covered-event discarding, revision-gap/database-change resync, reconnect backoff/exhaustion, unknown-vehicle waiting, and prompt SIGINT cancellation (I09-I10) |
 | `internal/inspectvalidate` | INS-05: the independent V01..V10 reference model and baseline file format, exercised with hand-built fixtures (not aggregator-generated) covering correct cases, one-at-a-time corruptions, gap-threshold boundaries, lineage cycles, and baseline immutability/monotonicity/IO edge cases (I11-I15) |
+
+Dashboard (from `dashboard/`):
+
+```bash
+pnpm test      # vitest run -- logarithmic speed coverage, chained merge selection, bounded/redacted logging, revision-safe pagination
+pnpm build     # tsc --noEmit && vite build -- type-checks and produces the production bundle in dist/
+pnpm preview   # serve the production build locally at http://127.0.0.1:4173/ (same /api proxy as pnpm dev)
+```
+
+See [dashboard/README.md](dashboard/README.md)'s "Verify / production build" section for `AGGREGATOR_URL` overrides and deployment notes (`dist/` alone is static; a real deployment still needs something to proxy `/api` and WebSocket upgrades to the aggregator).
 
 **Precommit crash-injection (T14):** `storage.Store.SetPrecommitFailureHook` installs a test-only hook invoked inside `WithWriteTx` after a transaction's writes are staged but before commit. `TestRestart_PrecommitFailureLeavesNoTrace` and `TestClose_PrecommitFailureLeavesNoTrace` (in `internal/aggregator`) use it to verify a failure at that point rolls back completely — no partial packet/fix/trip/barrier/revision — and that a subsequent retry succeeds cleanly as a fresh attempt.
 
@@ -447,4 +529,4 @@ SMOKE_DURATION_SECONDS=30 SMOKE_FIXES_PER_SEC=1000 go test ./internal/aggregator
 
 ## Scope and limitations
 
-This is a local demonstration, without authentication or production deployment infrastructure. Deliberately deferred per the spec: persistent event replay, automatic simulator retransmission, source-completeness watermarks, reopening closed trips, movement-based segmentation, map matching, and large-scale incremental reconstruction. INS-07's independent Python randomized fixture generator is deferred (P1). The dashboard is not yet implemented (see "Project status" above).
+This is a local demonstration, without authentication or production deployment infrastructure. Deliberately deferred per the spec: persistent event replay, automatic simulator retransmission, source-completeness watermarks, reopening closed trips, movement-based segmentation, map matching, and large-scale incremental reconstruction. INS-07's independent Python randomized fixture generator is deferred (P1).
