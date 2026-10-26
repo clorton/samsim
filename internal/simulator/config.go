@@ -183,8 +183,8 @@ func (c *Config) Validate() error {
 	if !c.RunStartMs.IsNow && c.RunStartMs.FixedMs <= 0 {
 		return fmt.Errorf("config: run_start_ms fixed value must be positive")
 	}
-	if math.IsNaN(c.ClockMultiplier) || math.IsInf(c.ClockMultiplier, 0) || c.ClockMultiplier < 10 || c.ClockMultiplier > 1000 {
-		return fmt.Errorf("config: clock_multiplier must be finite in [10,1000], got %v", c.ClockMultiplier)
+	if math.IsNaN(c.ClockMultiplier) || math.IsInf(c.ClockMultiplier, 0) || c.ClockMultiplier < 1 || c.ClockMultiplier > 1000 {
+		return fmt.Errorf("config: clock_multiplier must be finite in [1,1000], got %v", c.ClockMultiplier)
 	}
 	if c.ExpectedFixIntervalMs <= 0 {
 		return fmt.Errorf("config: expected_fix_interval_ms must be positive, got %d", c.ExpectedFixIntervalMs)

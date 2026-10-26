@@ -96,6 +96,12 @@ func (e *Engine) PutConfig(update ConfigUpdate) error {
 	e.mu.Lock()
 	currentRevision := e.controlRevision
 	currentCfg := e.cfg
+	uploadedData := e.uploadedRoutes[func() string {
+		if update.RouteID != nil {
+			return *update.RouteID
+		}
+		return ""
+	}()]
 	playbackState := e.playbackState
 	hasPending := e.pending != nil
 	totalUnsent := e.totalUnsentLocked()
@@ -181,10 +187,14 @@ func (e *Engine) PutConfig(update ConfigUpdate) error {
 	var newRouteData []byte
 	routeChanged := update.RouteID != nil && *update.RouteID != currentCfg.RouteID
 	if routeChanged {
-		if e.routeLoader == nil {
+		if e.routeLoader == nil && uploadedData == nil {
 			return fmt.Errorf("simulator: config update: route_id change requested but no route loader is configured")
 		}
-		data, err := e.routeLoader(newCfg.RouteID)
+		data := uploadedData
+		var err error
+		if data == nil {
+			data, err = e.routeLoader(newCfg.RouteID)
+		}
 		if err != nil {
 			return fmt.Errorf("%w: load route %q: %v", ErrInvalidRoute, newCfg.RouteID, err)
 		}

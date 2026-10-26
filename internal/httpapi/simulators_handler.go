@@ -53,7 +53,30 @@ func (s *Server) handleSimulatorAction(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w, r, http.MethodPost)
 		return
 	}
-	body, err := s.Control.Action(r.Context(), r.PathValue("id"), r.PathValue("action"))
+	reqBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64*1024))
+	if err != nil {
+		writeError(w, r, apierr.New(apierr.CodeBodyTooLarge, "control request body too large"))
+		return
+	}
+	body, err := s.Control.ActionBody(r.Context(), r.PathValue("id"), r.PathValue("action"), reqBody)
+	s.writeUpstreamResult(w, r, body, err)
+}
+
+func (s *Server) handleSimulatorUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, r, http.MethodPost)
+		return
+	}
+	if r.Header.Get("Content-Type") != "text/csv" {
+		writeError(w, r, apierr.New(apierr.CodeUnsupportedMediaType, "upload requires text/csv"))
+		return
+	}
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<20))
+	if err != nil {
+		writeError(w, r, apierr.New(apierr.CodeBodyTooLarge, "CSV exceeds 64 MiB upload limit"))
+		return
+	}
+	body, err := s.Control.UploadRoute(r.Context(), r.PathValue("id"), data)
 	s.writeUpstreamResult(w, r, body, err)
 }
 

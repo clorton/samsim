@@ -97,7 +97,7 @@ func TestParseConfig_InvalidFields(t *testing.T) {
 		{"aggregator_url with query", `"aggregator_url":"http://127.0.0.1:8080"`, `"aggregator_url":"http://127.0.0.1:8080?x=1"`},
 		{"aggregator_url with creds", `"aggregator_url":"http://127.0.0.1:8080"`, `"aggregator_url":"http://user:pass@127.0.0.1:8080"`},
 		{"unknown route_id", `"route_id":"demo"`, `"route_id":"nonexistent"`},
-		{"multiplier too low", `"clock_multiplier":100`, `"clock_multiplier":5`},
+		{"multiplier too low", `"clock_multiplier":100`, `"clock_multiplier":0.5`},
 		{"multiplier too high", `"clock_multiplier":100`, `"clock_multiplier":5000`},
 		{"packet_size zero", `"packet_size":10`, `"packet_size":0`},
 		{"packet_size too big", `"packet_size":10`, `"packet_size":100000`},

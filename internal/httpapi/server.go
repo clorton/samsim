@@ -48,6 +48,7 @@ func (s *Server) Router() http.Handler {
 		mux.HandleFunc("/api/v1/simulators", s.handleListSimulators)
 		mux.HandleFunc("/api/v1/simulators/{id}/status", s.handleSimulatorStatus)
 		mux.HandleFunc("/api/v1/simulators/{id}/config", s.handleSimulatorConfig)
+		mux.HandleFunc("/api/v1/simulators/{id}/routes", s.handleSimulatorUpload)
 		mux.HandleFunc("/api/v1/simulators/{id}/{action}", s.handleSimulatorAction)
 	}
 

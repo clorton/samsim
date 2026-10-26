@@ -1,5 +1,7 @@
 # GPS Telemetry Demo
 
+**Dashboard implemented:** see [dashboard/README.md](dashboard/README.md) for local startup, CSV uploads, simulator controls, live map, history and the database explorer. Start the aggregator with `config.dashboard.example.yaml` to enable its simulator registry.
+
 A weekend project demonstrating GPS telemetry ingestion, event-time trip reconstruction, and live vehicle visualization. The central scenario is a communications outage: current telemetry resumes first, then delayed fixes fill in history and merge provisional trips.
 
 The backend uses Go and SQLite. The planned dashboard uses React, TypeScript, Vite, and MapLibre GL JS.

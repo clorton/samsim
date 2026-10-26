@@ -5,12 +5,15 @@ package simulator
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
+	"strings"
 )
 
 // maxControlBodyBytes bounds request bodies for control endpoints (SIM-06).
@@ -32,6 +35,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/pause-transmission", s.handlePauseTransmission)
 	mux.HandleFunc("/resume-transmission", s.handleResumeTransmission)
 	mux.HandleFunc("/reset", s.handleReset)
+	mux.HandleFunc("/routes", s.handleUploadRoute)
 	return mux
 }
 
@@ -45,10 +49,20 @@ type errorBody struct {
 	Details map[string]any `json:"details,omitempty"`
 }
 
+// writeError renders err using the standard envelope and status code.
+//
+// If err is (or wraps) the client having gone away -- the request context
+// was canceled, typically because the browser aborted an in-flight fetch or
+// navigated away -- this is logged at DEBUG rather than ERROR: it is a
+// routine consequence of a live-polling dashboard, not a server fault.
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var ae *APIError
 	if !errors.As(err, &ae) {
-		slog.ErrorContext(r.Context(), "unhandled internal error", "error", err, "path", r.URL.Path)
+		if isClientGone(r.Context(), err) {
+			slog.DebugContext(r.Context(), "request canceled by client", "error", err, "path", r.URL.Path)
+		} else {
+			slog.ErrorContext(r.Context(), "unhandled internal error", "error", err, "path", r.URL.Path)
+		}
 		writeJSON(w, http.StatusInternalServerError, errorEnvelope{Error: errorBody{
 			Code:    "INTERNAL",
 			Message: "internal server error",
@@ -62,12 +76,34 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	}})
 }
 
+// isClientGone reports whether err reflects the client disconnecting or
+// canceling the request, rather than a genuine server-side fault.
+func isClientGone(ctx context.Context, err error) bool {
+	return ctx.Err() == context.Canceled || errors.Is(err, context.Canceled)
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(body); err != nil {
-		slog.Error("failed to encode JSON response", "error", err)
+		if isWriteBrokenByClient(err) {
+			slog.Debug("client disconnected before response was fully written", "error", err)
+		} else {
+			slog.Error("failed to encode JSON response", "error", err)
+		}
 	}
+}
+
+// isWriteBrokenByClient reports whether err from writing an HTTP response
+// body reflects the client closing/resetting the connection before the
+// server finished writing, rather than a genuine server-side fault.
+func isWriteBrokenByClient(err error) bool {
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "broken pipe") || strings.Contains(msg, "connection reset by peer")
 }
 
 func methodNotAllowed(w http.ResponseWriter, r *http.Request, allow string) {

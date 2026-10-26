@@ -111,10 +111,24 @@ func (p *Proxy) Config(ctx context.Context, simulatorID string, body []byte) ([]
 // Action proxies POST /{action} to the simulator's control URL, if action is
 // in the fixed allowlist.
 func (p *Proxy) Action(ctx context.Context, simulatorID, action string) ([]byte, error) {
+	return p.ActionBody(ctx, simulatorID, action, nil)
+}
+
+func (p *Proxy) ActionBody(ctx context.Context, simulatorID, action string, body []byte) ([]byte, error) {
 	if !allowedActions[action] {
 		return nil, ErrUnknownAction
 	}
-	return p.do(ctx, simulatorID, http.MethodPost, "/"+action, nil)
+	if len(body) > maxUpstreamReqBody {
+		return nil, &UpstreamError{Kind: "client_error", StatusCode: http.StatusRequestEntityTooLarge}
+	}
+	return p.do(ctx, simulatorID, http.MethodPost, "/"+action, body)
+}
+
+func (p *Proxy) UploadRoute(ctx context.Context, simulatorID string, body []byte) ([]byte, error) {
+	if len(body) > 64<<20 {
+		return nil, &UpstreamError{Kind: "client_error", StatusCode: http.StatusRequestEntityTooLarge}
+	}
+	return p.do(ctx, simulatorID, http.MethodPost, "/routes", body)
 }
 
 func (p *Proxy) do(ctx context.Context, simulatorID, method, path string, body []byte) ([]byte, error) {
@@ -123,7 +137,11 @@ func (p *Proxy) do(ctx context.Context, simulatorID, method, path string, body [
 		return nil, ErrUnknownSimulator
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, upstreamTimeout)
+	timeout := upstreamTimeout
+	if path == "/routes" {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	var reqBody io.Reader
@@ -136,6 +154,9 @@ func (p *Proxy) do(ctx context.Context, simulatorID, method, path string, body [
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+		if path == "/routes" {
+			req.Header.Set("Content-Type", "text/csv")
+		}
 	}
 
 	resp, err := p.client.Do(req)

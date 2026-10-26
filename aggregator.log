@@ -1,0 +1,3 @@
+{"time":"2026-10-25T20:42:05.042326-07:00","level":"INFO","msg":"configuration loaded","listen":"127.0.0.1:8080","database_path":"./data/gps.sqlite","trip_gap_seconds":600,"expected_fix_interval_ms":1000,"max_body_bytes":1048576,"max_fixes_per_packet":10000,"simulators_configured":0}
+{"time":"2026-10-25T20:42:05.043687-07:00","level":"INFO","msg":"storage ready","database_id":"a1bb7123-873c-4ac4-988e-9638f1d35d84","path":"./data/gps.sqlite"}
+{"time":"2026-10-25T20:42:05.043764-07:00","level":"INFO","msg":"aggregator listening","addr":"127.0.0.1:8080"}

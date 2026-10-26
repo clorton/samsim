@@ -125,12 +125,13 @@ type Engine struct {
 	mu        sync.Mutex
 	controlMu sync.Mutex
 
-	cfg         Config
-	mono        MonotonicClock
-	nowWall     func() time.Time
-	identity    sequenceAllocator
-	sender      packetSender
-	routeLoader RouteLoader
+	cfg            Config
+	mono           MonotonicClock
+	nowWall        func() time.Time
+	identity       sequenceAllocator
+	sender         packetSender
+	routeLoader    RouteLoader
+	uploadedRoutes map[string][]byte // process-local validated browser uploads
 
 	// routeData holds the raw validated bytes of the currently configured
 	// route, so it can be re-resolved against a new run start without

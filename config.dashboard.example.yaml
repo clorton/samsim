@@ -1,0 +1,9 @@
+# Local dashboard + simulator registry. Start from the repository root.
+listen: 127.0.0.1:8080
+database_path: ./data/gps.sqlite
+trip_gap_seconds: 600
+expected_fix_interval_ms: 1000
+simulators:
+  - simulator_id: sim-001
+    control_url: http://127.0.0.1:8090
+    vehicle_id: vehicle-001

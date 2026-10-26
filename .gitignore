@@ -4,6 +4,9 @@
 *.sqlite-shm
 /dashboard/node_modules/
 /dashboard/dist/
+/dashboard/.pnpm-store/
+/.pnpm-store/
+/dashboard/*.tsbuildinfo
 /bin/
 /gpsinspect
 /aggregator
